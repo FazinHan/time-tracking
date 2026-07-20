@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Kimai / Tabler palette -->
+    <color name="kimai_primary">#FF206BC4</color>
+    <color name="kimai_red">#FFD63939</color>
+    <color name="kimai_green">#FF2FB344</color>
+    <color name="kimai_bg">#FF1A2234</color>
+    <color name="kimai_surface">#FF25304A</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="black">#FF000000</color>
+</resources>

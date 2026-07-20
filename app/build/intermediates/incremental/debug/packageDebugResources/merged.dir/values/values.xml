@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="kimai_bg">#FF1A2234</color>
+    <color name="kimai_green">#FF2FB344</color>
+    <color name="kimai_primary">#FF206BC4</color>
+    <color name="kimai_red">#FFD63939</color>
+    <color name="kimai_surface">#FF25304A</color>
+    <color name="white">#FFFFFFFF</color>
+    <string name="app_name">Kimai Timer</string>
+    <style name="Theme.KimaiTimer" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@color/kimai_bg</item>
+        <item name="android:navigationBarColor">@color/kimai_bg</item>
+        <item name="android:windowBackground">@color/kimai_bg</item>
+    </style>
+</resources>
