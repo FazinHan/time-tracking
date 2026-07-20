@@ -26,6 +26,9 @@ interface KimaiApi {
     @GET("api/activities")
     suspend fun activities(): List<Activity>
 
+    @GET("api/tags")
+    suspend fun tags(): List<String>
+
     @GET("api/timesheets/active")
     suspend fun active(): List<TimesheetActive>
 

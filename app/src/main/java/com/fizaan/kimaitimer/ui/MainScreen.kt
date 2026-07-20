@@ -6,9 +6,11 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +27,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -42,6 +46,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -73,6 +78,9 @@ fun MainScreen(
     onOpenCreate: () -> Unit,
     onDismissCreate: () -> Unit,
     onCreateActivity: (String) -> Unit,
+    onEditTag: (Int) -> Unit,
+    onConfirmTag: (List<String>) -> Unit,
+    onDismissTagDialog: () -> Unit,
     onRefresh: () -> Unit,
     onReconfigure: () -> Unit,
     onClearError: () -> Unit,
@@ -161,6 +169,7 @@ fun MainScreen(
             state = state,
             onPick = onPickActivity,
             onResume = onResume,
+            onEditTag = onEditTag,
             onCreate = onOpenCreate,
             onDismiss = onDismissPicker,
         )
@@ -170,6 +179,15 @@ fun MainScreen(
             busy = state.busy,
             onCreate = onCreateActivity,
             onDismiss = onDismissCreate,
+        )
+    }
+    if (state.showTagDialog) {
+        TagPickerDialog(
+            activityName = state.tagActivityName,
+            allTags = state.allTags,
+            initiallySelected = state.tagSelected,
+            onConfirm = onConfirmTag,
+            onDismiss = onDismissTagDialog,
         )
     }
 }
@@ -285,11 +303,13 @@ private fun parseBeginMillis(iso: String?): Long? {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ActivityPickerDialog(
     state: UiState,
     onPick: (Int) -> Unit,
     onResume: (TimesheetActive) -> Unit,
+    onEditTag: (Int) -> Unit,
     onCreate: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -306,13 +326,17 @@ private fun ActivityPickerDialog(
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 if (recent.isNotEmpty()) {
-                    SectionLabel("Recent — tap to resume")
+                    SectionLabel("Recent — tap to resume · long-press to tag")
                     recent.forEach { item ->
-                        RecentRow(item = item, onClick = { onResume(item) })
+                        RecentRow(
+                            item = item,
+                            onClick = { onResume(item) },
+                            onLongClick = { item.activity?.id?.let(onEditTag) },
+                        )
                         Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
                     }
                     Spacer(Modifier.height(16.dp))
-                    SectionLabel("All activities")
+                    SectionLabel("All activities — tap to start · long-press to tag")
                 }
                 if (state.activities.isEmpty()) {
                     Text("No activities yet. Create one below.")
@@ -323,7 +347,10 @@ private fun ActivityPickerDialog(
                         fontSize = 18.sp,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onPick(act.id) }
+                            .combinedClickable(
+                                onClick = { onPick(act.id) },
+                                onLongClick = { onEditTag(act.id) },
+                            )
                             .padding(vertical = 14.dp),
                     )
                     Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
@@ -353,12 +380,13 @@ private fun SectionLabel(text: String) {
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RecentRow(item: TimesheetActive, onClick: () -> Unit) {
+private fun RecentRow(item: TimesheetActive, onClick: () -> Unit, onLongClick: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(vertical = 12.dp),
     ) {
         Text(
@@ -374,7 +402,79 @@ private fun RecentRow(item: TimesheetActive, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             )
         }
+        val tags = item.tags?.filter { it.isNotBlank() }.orEmpty()
+        if (tags.isNotEmpty()) {
+            Text(
+                text = tags.joinToString(" · "),
+                fontSize = 12.sp,
+                color = KimaiPrimary,
+            )
+        }
     }
+}
+
+/**
+ * Choose which tag(s) ride with an activity. Backed by the server's existing
+ * tags (Kimai silently drops unknown tags, so free text is not offered). The
+ * choice is remembered per-activity on the device.
+ */
+@Composable
+private fun TagPickerDialog(
+    activityName: String,
+    allTags: List<String>,
+    initiallySelected: List<String>,
+    onConfirm: (List<String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val selected = remember { mutableStateListOf<String>().apply { addAll(initiallySelected) } }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Tag “$activityName”") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                if (allTags.isEmpty()) {
+                    Text("No tags found on the server. Add tags in Kimai first.")
+                } else {
+                    Text(
+                        text = "This choice is saved and reused every time you start this activity.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    allTags.forEach { tag ->
+                        val isSel = selected.contains(tag)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (isSel) selected.remove(tag) else selected.add(tag)
+                                }
+                                .padding(vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = if (isSel) Icons.Filled.CheckBox
+                                else Icons.Filled.CheckBoxOutlineBlank,
+                                contentDescription = null,
+                                tint = if (isSel) KimaiPrimary
+                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            )
+                            Spacer(Modifier.size(12.dp))
+                            Text(tag, fontSize = 17.sp)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            OutlinedButton(onClick = { onConfirm(selected.toList()) }) {
+                Text(if (selected.isEmpty()) "Save (no tag)" else "Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable

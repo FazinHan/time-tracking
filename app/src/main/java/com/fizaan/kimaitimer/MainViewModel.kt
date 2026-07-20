@@ -27,9 +27,16 @@ data class UiState(
     val running: TimesheetActive? = null,
     val activities: List<Activity> = emptyList(),
     val recent: List<TimesheetActive> = emptyList(),
+    val allTags: List<String> = emptyList(),
     val projectName: String = "",
     val showPickDialog: Boolean = false,
     val showCreateDialog: Boolean = false,
+    // Tag prompt (first-time tagging / re-tagging an activity).
+    val showTagDialog: Boolean = false,
+    val tagActivityId: Int? = null,
+    val tagActivityName: String = "",
+    val tagSelected: List<String> = emptyList(),
+    val tagStartAfter: Boolean = false,
 )
 
 /** Setup-flow state (first run / reconfigure). */
@@ -150,8 +157,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val acts = api().activities().filter { it.visible }.sortedBy { it.name.lowercase() }
                 // "recent" is a nice-to-have; don't let it break the main screen.
                 val recent = try { api().recent(8) } catch (e: Exception) { _ui.value.recent }
+                // Tags are used to build the picker; best-effort like recent.
+                val tags = try { api().tags() } catch (e: Exception) { _ui.value.allTags }
                 _ui.value = _ui.value.copy(
-                    loading = false, running = active, activities = acts, recent = recent,
+                    loading = false, running = active, activities = acts,
+                    recent = recent, allTags = tags,
                 )
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(loading = false, error = friendly(e))
@@ -165,13 +175,77 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissCreate() { _ui.value = _ui.value.copy(showCreateDialog = false) }
 
     fun startActivity(activityId: Int) {
-        start(activityId, description = null, tags = null)
+        // If we already know how this activity should be tagged (either the user
+        // set it before, or we can seed it from how it was tagged on the server),
+        // start straight away. Otherwise prompt once and remember the choice.
+        val known = resolveTag(activityId)
+        if (known != null) {
+            start(activityId, description = null, tags = known.ifBlank { null })
+        } else {
+            openTagDialog(activityId, startAfter = true)
+        }
     }
 
     /** Resume a recent activity, carrying over its description and tags. */
     fun resume(item: TimesheetActive) {
         val activityId = item.activity?.id ?: return
-        start(activityId, description = item.description, tags = item.tags?.joinToString(","))
+        val tags = item.tags?.filter { it.isNotBlank() }.orEmpty()
+        // Seed the on-device memory from a tagged entry, but don't let an
+        // untagged resume permanently suppress the first-time prompt.
+        if (tags.isNotEmpty()) prefs.setTag(activityId, tags.joinToString(","))
+        start(activityId, description = item.description, tags = tags.joinToString(",").ifBlank { null })
+    }
+
+    /**
+     * The tag string to attach to a start of [activityId], or null if undecided.
+     * Prefers the user's stored choice; falls back to seeding from the most
+     * recent server timesheet for that activity (and persists that seed).
+     */
+    private fun resolveTag(activityId: Int): String? {
+        prefs.tagFor(activityId)?.let { return it }
+        val seeded = recentTag(activityId) ?: return null
+        prefs.setTag(activityId, seeded)
+        return seeded
+    }
+
+    /** Comma-joined tags from the latest recent timesheet of [activityId], if any tagged. */
+    private fun recentTag(activityId: Int): String? =
+        _ui.value.recent
+            .firstOrNull { it.activity?.id == activityId && !it.tags.isNullOrEmpty() }
+            ?.tags?.joinToString(",")
+
+    private fun openTagDialog(activityId: Int, startAfter: Boolean) {
+        val name = _ui.value.activities.firstOrNull { it.id == activityId }?.name
+            ?: _ui.value.recent.firstOrNull { it.activity?.id == activityId }?.activity?.name
+            ?: ""
+        val current = (prefs.tagFor(activityId) ?: recentTag(activityId))
+            ?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+            ?: emptyList()
+        _ui.value = _ui.value.copy(
+            showPickDialog = false,
+            showTagDialog = true,
+            tagActivityId = activityId,
+            tagActivityName = name,
+            tagSelected = current,
+            tagStartAfter = startAfter,
+        )
+    }
+
+    /** Open the tag editor for an activity without starting it (long-press). */
+    fun editTag(activityId: Int) = openTagDialog(activityId, startAfter = false)
+
+    fun dismissTagDialog() {
+        _ui.value = _ui.value.copy(showTagDialog = false, tagActivityId = null)
+    }
+
+    /** Save the chosen tags for the current dialog's activity; start it if requested. */
+    fun confirmTag(tags: List<String>) {
+        val activityId = _ui.value.tagActivityId ?: return
+        val startAfter = _ui.value.tagStartAfter
+        val joined = tags.joinToString(",")
+        prefs.setTag(activityId, joined)
+        _ui.value = _ui.value.copy(showTagDialog = false, tagActivityId = null)
+        if (startAfter) start(activityId, description = null, tags = joined.ifBlank { null })
     }
 
     private fun start(activityId: Int, description: String?, tags: String?) {

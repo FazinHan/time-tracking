@@ -38,4 +38,16 @@ class Prefs(context: Context) {
 
     val isConfigured: Boolean
         get() = baseUrl.isNotBlank() && token.isNotBlank() && projectId >= 0
+
+    // ---- Per-activity tag memory ----
+    //
+    // The comma-separated tag string chosen for a given activity, stored on the
+    // device so every future start of that activity rides with the same tag(s).
+    // Returns null when the activity has never been tagged (→ prompt the user);
+    // returns "" when the user deliberately chose no tag (→ never reprompt).
+
+    fun tagFor(activityId: Int): String? = sp.getString("tag_$activityId", null)
+
+    fun setTag(activityId: Int, tags: String) =
+        sp.edit().putString("tag_$activityId", tags).apply()
 }
