@@ -63,4 +63,4 @@ Cleartext HTTP is enabled so the app can talk to a Kimai instance on your LAN.
 
 ## License
 
-Personal project — no license specified.
+This project is licensed under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for details.
