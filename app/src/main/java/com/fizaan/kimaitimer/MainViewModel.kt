@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.fizaan.kimaitimer.data.Activity
+import com.fizaan.kimaitimer.data.ActivityColorUpdate
 import com.fizaan.kimaitimer.data.ActivityCreate
 import com.fizaan.kimaitimer.data.ApiProvider
 import com.fizaan.kimaitimer.data.Customer
@@ -11,16 +12,50 @@ import com.fizaan.kimaitimer.data.Prefs
 import com.fizaan.kimaitimer.data.Project
 import com.fizaan.kimaitimer.data.TimesheetActive
 import com.fizaan.kimaitimer.data.TimesheetCreate
+import com.fizaan.kimaitimer.data.TimesheetEntry
+import com.fizaan.kimaitimer.data.TimesheetUpdate
+import com.fizaan.kimaitimer.util.formatKimai
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.time.DayOfWeek
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+
+enum class AppScreen { TIMER, VIZ, SHEET }
+enum class VizTab { PIE, BAR }
+enum class PieMode { ACTIVITY, TAG }
+enum class VizPeriod { DAY, WEEK, MONTH, YEAR }
+
+/** Visualisation screen state. Entries are refetched on every open/change. */
+data class VizState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val tab: VizTab = VizTab.PIE,
+    val pieMode: PieMode = PieMode.ACTIVITY,
+    val period: VizPeriod = VizPeriod.DAY,
+    val pieEntries: List<TimesheetEntry> = emptyList(),
+    val barEntries: List<TimesheetEntry> = emptyList(),   // last 30 days
+    val activities: List<Activity> = emptyList(),
+)
+
+/** Timesheet screen state. */
+data class SheetState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val saving: Boolean = false,
+    val entries: List<TimesheetEntry> = emptyList(),
+    val activities: List<Activity> = emptyList(),
+    val colorChoices: Map<String, String> = emptyMap(),   // server palette, name → hex
+    val editing: TimesheetEntry? = null,
+)
 
 /** Whole-app UI state. */
 data class UiState(
     val configured: Boolean = false,
+    val screen: AppScreen = AppScreen.TIMER,
     val loading: Boolean = false,
     val busy: Boolean = false,          // an action (start/stop/create) is in flight
     val error: String? = null,
@@ -63,6 +98,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _setup = MutableStateFlow(SetupState(baseUrl = defaultUrlHint()))
     val setup: StateFlow<SetupState> = _setup.asStateFlow()
+
+    private val _viz = MutableStateFlow(VizState())
+    val viz: StateFlow<VizState> = _viz.asStateFlow()
+
+    private val _sheet = MutableStateFlow(SheetState())
+    val sheet: StateFlow<SheetState> = _sheet.asStateFlow()
 
     init {
         if (prefs.isConfigured) {
@@ -300,6 +341,112 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearError() { _ui.value = _ui.value.copy(error = null) }
+
+    // ---------------- Navigation ----------------
+
+    fun navigate(screen: AppScreen) {
+        _ui.value = _ui.value.copy(screen = screen)
+        when (screen) {
+            AppScreen.TIMER -> refresh()
+            AppScreen.VIZ -> loadViz()
+            AppScreen.SHEET -> loadSheet()
+        }
+    }
+
+    // ---------------- Visualisations ----------------
+
+    fun setVizTab(tab: VizTab) { _viz.value = _viz.value.copy(tab = tab) }
+
+    fun setPieMode(mode: PieMode) { _viz.value = _viz.value.copy(pieMode = mode) }
+
+    fun setPeriod(period: VizPeriod) {
+        _viz.value = _viz.value.copy(period = period)
+        loadViz()
+    }
+
+    /** Period start for the pie query (calendar day / ISO week / month / year). */
+    private fun periodStart(period: VizPeriod, today: LocalDate): LocalDate = when (period) {
+        VizPeriod.DAY -> today
+        VizPeriod.WEEK -> today.with(DayOfWeek.MONDAY)
+        VizPeriod.MONTH -> today.withDayOfMonth(1)
+        VizPeriod.YEAR -> today.withDayOfYear(1)
+    }
+
+    /** Fetch everything the viz screen needs, fresh from the server. */
+    fun loadViz() {
+        _viz.value = _viz.value.copy(loading = true, error = null)
+        viewModelScope.launch {
+            try {
+                val today = LocalDate.now()
+                val begin = formatKimai(periodStart(_viz.value.period, today).atStartOfDay())
+                val end = formatKimai(today.plusDays(1).atStartOfDay())
+                val barBegin = formatKimai(today.minusDays(29).atStartOfDay())
+                val acts = api().activities()
+                val pie = api().timesheets(begin = begin, end = end)
+                val bar = api().timesheets(begin = barBegin, end = end)
+                _viz.value = _viz.value.copy(
+                    loading = false, pieEntries = pie, barEntries = bar, activities = acts,
+                )
+            } catch (e: Exception) {
+                _viz.value = _viz.value.copy(loading = false, error = friendly(e))
+            }
+        }
+    }
+
+    // ---------------- Timesheet ----------------
+
+    fun loadSheet() {
+        _sheet.value = _sheet.value.copy(loading = true, error = null)
+        viewModelScope.launch {
+            try {
+                val today = LocalDate.now()
+                val entries = api().timesheets(
+                    begin = formatKimai(today.minusDays(365).atStartOfDay()),
+                    end = formatKimai(today.plusDays(1).atStartOfDay()),
+                )
+                val acts = api().activities()
+                val colors = try { api().configColors() } catch (e: Exception) { _sheet.value.colorChoices }
+                _sheet.value = _sheet.value.copy(
+                    loading = false, entries = entries, activities = acts, colorChoices = colors,
+                )
+            } catch (e: Exception) {
+                _sheet.value = _sheet.value.copy(loading = false, error = friendly(e))
+            }
+        }
+    }
+
+    fun openEdit(entry: TimesheetEntry) { _sheet.value = _sheet.value.copy(editing = entry) }
+    fun dismissEdit() { _sheet.value = _sheet.value.copy(editing = null) }
+
+    /**
+     * Persist an edit: optionally recolor the activity (server-wide), then
+     * update the entry's begin/end. A null [endIso] leaves the end untouched
+     * (running entries stay running unless an end is explicitly set).
+     */
+    fun saveEdit(
+        entryId: Int,
+        activityId: Int,
+        beginIso: String,
+        endIso: String?,
+        newColor: String?,
+    ) {
+        _sheet.value = _sheet.value.copy(saving = true, error = null)
+        viewModelScope.launch {
+            try {
+                if (newColor != null) {
+                    api().updateActivityColor(activityId, ActivityColorUpdate(color = newColor))
+                }
+                api().updateTimesheet(entryId, TimesheetUpdate(begin = beginIso, end = endIso))
+                _sheet.value = _sheet.value.copy(saving = false, editing = null)
+                loadSheet()
+            } catch (e: Exception) {
+                _sheet.value = _sheet.value.copy(saving = false, error = friendly(e))
+            }
+        }
+    }
+
+    fun clearSheetError() { _sheet.value = _sheet.value.copy(error = null) }
+    fun clearVizError() { _viz.value = _viz.value.copy(error = null) }
 
     private fun friendly(e: Exception): String {
         val msg = e.message ?: e.javaClass.simpleName

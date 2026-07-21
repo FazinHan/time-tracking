@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -70,6 +71,7 @@ import java.time.format.DateTimeFormatter
 @Composable
 fun MainScreen(
     state: UiState,
+    onMenu: () -> Unit,
     onStartTap: () -> Unit,
     onStopTap: () -> Unit,
     onPickActivity: (Int) -> Unit,
@@ -99,7 +101,10 @@ fun MainScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column {
+            IconButton(onClick = onMenu) {
+                Icon(Icons.Filled.Menu, "Menu", tint = MaterialTheme.colorScheme.onBackground)
+            }
+            Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
                 Text(
                     text = state.projectName.ifBlank { "Kimai Timer" },
                     color = MaterialTheme.colorScheme.onBackground,

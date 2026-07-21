@@ -43,6 +43,23 @@ interface KimaiApi {
 
     @POST("api/activities")
     suspend fun createActivity(@Body body: ActivityCreate): Activity
+
+    @GET("api/timesheets")
+    suspend fun timesheets(
+        @retrofit2.http.Query("begin") begin: String,
+        @retrofit2.http.Query("end") end: String,
+        @retrofit2.http.Query("size") size: Int = 1000,
+    ): List<TimesheetEntry>
+
+    @PATCH("api/timesheets/{id}")
+    suspend fun updateTimesheet(@Path("id") id: Int, @Body body: TimesheetUpdate): CreatedTimesheet
+
+    @PATCH("api/activities/{id}")
+    suspend fun updateActivityColor(@Path("id") id: Int, @Body body: ActivityColorUpdate): Activity
+
+    /** The server's configured color palette (name → hex). PATCHed colors must come from it. */
+    @GET("api/config/colors")
+    suspend fun configColors(): Map<String, String>
 }
 
 /**

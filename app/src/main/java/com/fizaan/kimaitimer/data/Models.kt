@@ -24,6 +24,7 @@ data class Activity(
     val name: String,
     val project: Int? = null,
     val visible: Boolean = true,
+    val color: String? = null,
 )
 
 /** A nested {id, name} reference as returned by the "expanded" collections. */
@@ -56,6 +57,21 @@ data class VersionInfo(
     @Json(name = "versionId") val versionId: Long? = null,
 )
 
+/**
+ * Compact timesheet record as returned by GET /api/timesheets (range queries):
+ * activity/project are plain ids here, unlike the expanded active/recent shape.
+ */
+data class TimesheetEntry(
+    val id: Int,
+    val begin: String,
+    val end: String? = null,
+    val duration: Long? = null,   // seconds; 0 while running
+    val description: String? = null,
+    val tags: List<String>? = null,
+    val activity: Int,
+    val project: Int? = null,
+)
+
 // ---- Request bodies ----
 
 data class TimesheetCreate(
@@ -70,4 +86,14 @@ data class ActivityCreate(
     val name: String,
     val project: Int? = null,
     val visible: Boolean = true,
+)
+
+/** Moshi omits nulls, so a null end leaves the server value untouched. */
+data class TimesheetUpdate(
+    val begin: String,
+    val end: String? = null,
+)
+
+data class ActivityColorUpdate(
+    val color: String,
 )

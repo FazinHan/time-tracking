@@ -15,7 +15,7 @@ val KimaiBg = Color(0xFF141414)      // really dark grey
 val KimaiSurface = Color(0xFF232323) // dark grey surface (dialogs)
 
 private val DarkColors = darkColorScheme(
-    primary = KimaiPrimary,
+    primary = KimaiGreen,
     onPrimary = Color.White,
     background = KimaiBg,
     onBackground = Color(0xFFE7ECF3),
