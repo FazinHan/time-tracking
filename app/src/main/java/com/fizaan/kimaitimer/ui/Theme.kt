@@ -11,8 +11,8 @@ import androidx.compose.ui.graphics.Color
 val KimaiPrimary = Color(0xFF206BC4)
 val KimaiRed = Color(0xFFD63939)
 val KimaiGreen = Color(0xFF2FB344)
-val KimaiBg = Color(0xFF1A2234)
-val KimaiSurface = Color(0xFF25304A)
+val KimaiBg = Color(0xFF141414)      // really dark grey
+val KimaiSurface = Color(0xFF232323) // dark grey surface (dialogs)
 
 private val DarkColors = darkColorScheme(
     primary = KimaiPrimary,

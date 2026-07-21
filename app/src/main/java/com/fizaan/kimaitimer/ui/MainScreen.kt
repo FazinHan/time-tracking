@@ -234,11 +234,11 @@ private fun BigButton(running: Boolean, busy: Boolean, onClick: () -> Unit) {
                 }
             }
         } else {
-            // Solid blue play button
+            // Solid green play button
             Box(
                 modifier = Modifier
                     .size(size)
-                    .background(KimaiPrimary, CircleShape)
+                    .background(KimaiGreen, CircleShape)
                     .clickable(enabled = !busy) { onClick() },
                 contentAlignment = Alignment.Center,
             ) {
@@ -407,7 +407,7 @@ private fun RecentRow(item: TimesheetActive, onClick: () -> Unit, onLongClick: (
             Text(
                 text = tags.joinToString(" · "),
                 fontSize = 12.sp,
-                color = KimaiPrimary,
+                color = KimaiGreen,
             )
         }
     }
@@ -456,7 +456,7 @@ private fun TagPickerDialog(
                                 imageVector = if (isSel) Icons.Filled.CheckBox
                                 else Icons.Filled.CheckBoxOutlineBlank,
                                 contentDescription = null,
-                                tint = if (isSel) KimaiPrimary
+                                tint = if (isSel) KimaiGreen
                                 else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                             )
                             Spacer(Modifier.size(12.dp))
