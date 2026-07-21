@@ -218,7 +218,20 @@ private fun PieTab(
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 )
             } else {
-                PieChart(slices, total)
+                // Tag pie: the centre shows a productivity score — productive
+                // share of the *classified* (tagged) time — instead of the total.
+                val productive = slices.firstOrNull { it.label == "productive" }?.seconds ?: 0L
+                val unproductive = slices.firstOrNull { it.label == "unproductive" }?.seconds ?: 0L
+                val classified = productive + unproductive
+                if (state.pieMode == PieMode.TAG && classified > 0) {
+                    PieChart(
+                        slices, total,
+                        centerLabel = "${(productive * 100f / classified + 0.5f).toInt()}%",
+                        centerSub = "productive",
+                    )
+                } else {
+                    PieChart(slices, total, centerLabel = formatDuration(total), centerSub = "total")
+                }
                 Spacer(Modifier.height(20.dp))
                 slices.forEach { s -> LegendRow(s, total) }
             }
@@ -252,7 +265,7 @@ private fun PieTab(
 }
 
 @Composable
-private fun PieChart(slices: List<Slice>, total: Long) {
+private fun PieChart(slices: List<Slice>, total: Long, centerLabel: String, centerSub: String) {
     val diameter = 240.dp
     Box(contentAlignment = Alignment.Center) {
         Canvas(modifier = Modifier.size(diameter)) {
@@ -280,13 +293,13 @@ private fun PieChart(slices: List<Slice>, total: Long) {
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = formatDuration(total),
+                text = centerLabel,
                 color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 26.sp,
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                text = "total",
+                text = centerSub,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
                 fontSize = 13.sp,
             )
