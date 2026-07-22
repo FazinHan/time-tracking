@@ -51,10 +51,11 @@ fun colorForActivity(activityId: Int, activities: List<Activity>): Color {
  */
 fun colorForTag(tag: String, allTags: List<String>): Color = when (tag.lowercase()) {
     "productive" -> Color(0xFF0CA30C)
+    "semi-productive" -> Color(0xFFDB9A00)
     "unproductive" -> Color(0xFFD03B3B)
     "" -> UntaggedGray
     else -> {
-        val others = allTags.filter { it.lowercase() !in setOf("productive", "unproductive") }.sorted()
+        val others = allTags.filter { it.lowercase() !in setOf("productive", "semi-productive", "unproductive") }.sorted()
         val idx = others.indexOf(tag)
         FallbackPalette[(if (idx >= 0) idx else 0) % FallbackPalette.size]
     }

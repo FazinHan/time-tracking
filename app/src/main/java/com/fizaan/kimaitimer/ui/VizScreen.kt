@@ -220,13 +220,15 @@ private fun PieTab(
             } else {
                 // Tag pie: the centre shows a productivity score — productive
                 // share of the *classified* (tagged) time — instead of the total.
+                // Semi-productive time counts at half weight.
                 val productive = slices.firstOrNull { it.label == "productive" }?.seconds ?: 0L
                 val unproductive = slices.firstOrNull { it.label == "unproductive" }?.seconds ?: 0L
-                val classified = productive + unproductive
+                val semiProductive = slices.firstOrNull { it.label == "semi-productive" }?.seconds ?: 0L
+                val classified = productive + unproductive + semiProductive
                 if (state.pieMode == PieMode.TAG && classified > 0) {
                     PieChart(
                         slices, total,
-                        centerLabel = "${(productive * 100f / classified + 0.5f).toInt()}%",
+                        centerLabel = "${((productive + semiProductive * 0.5f) * 100f / classified + 0.5f).toInt()}%",
                         centerSub = "productive",
                     )
                 } else {
