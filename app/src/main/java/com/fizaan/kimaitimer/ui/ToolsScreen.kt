@@ -265,21 +265,19 @@ private fun FrequencyTool(
 
 @Composable
 private fun ResultCard(r: FreqResult) {
-    val active = r.activeDays
-    if (active <= 0) return
-    // Daily frequency is per *active* day (idle days excluded). Weekly/monthly/
-    // yearly are calendar rates over the full span, so gaps between sessions
-    // count against them.
-    val span = (ChronoUnit.DAYS.between(r.from, r.to) + 1).coerceAtLeast(1).toDouble()
-    val yearlyFactor = 365.25 / span
+    if (r.activeDays <= 0) return
+    // Each frequency = sessions ÷ number of active periods of that granularity,
+    // so empty days/weeks/months/years don't dilute the count. With all data in
+    // one week/month/year, weekly/monthly/yearly all equal the total sessions.
     val rows = listOf(
-        "Daily" to r.sessions / active.toDouble(),
-        "Weekly" to r.sessions / (span / 7.0),
-        "Monthly" to r.sessions / (span / 30.4375),
-        "Yearly" to r.sessions * yearlyFactor,
+        "Daily" to r.sessions / r.activeDays.toDouble(),
+        "Weekly" to r.sessions / r.activeWeeks.coerceAtLeast(1).toDouble(),
+        "Monthly" to r.sessions / r.activeMonths.coerceAtLeast(1).toDouble(),
+        "Yearly" to r.sessions / r.activeYears.coerceAtLeast(1).toDouble(),
     )
-    // Time actually spent, projected to a full year over the same span.
-    val yearlySeconds = (r.totalSeconds * yearlyFactor).toLong()
+    // Time spent, projected to a full year over the selected span.
+    val span = (ChronoUnit.DAYS.between(r.from, r.to) + 1).coerceAtLeast(1).toDouble()
+    val yearlySeconds = (r.totalSeconds * 365.25 / span).toLong()
 
     Column(
         modifier = Modifier
@@ -291,7 +289,7 @@ private fun ResultCard(r: FreqResult) {
             .padding(16.dp),
     ) {
         Text(
-            "Over $active active day${if (active == 1) "" else "s"}: ${r.sessions} session" +
+            "Over ${r.activeDays} active day${if (r.activeDays == 1) "" else "s"}: ${r.sessions} session" +
                 "${if (r.sessions == 1) "" else "s"}, ${formatDuration(r.totalSeconds)} total",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
@@ -308,7 +306,7 @@ private fun ResultCard(r: FreqResult) {
         rows.forEach { (label, count) ->
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                 BodyCell(label, 1f, bold = true)
-                BodyCell("%.1f".format(count), 1f)
+                BodyCell(formatFreq(count), 1f)
             }
         }
         androidx.compose.material3.Divider(
@@ -360,6 +358,10 @@ private fun androidx.compose.foundation.layout.RowScope.BodyCell(
         modifier = Modifier.weight(weight),
     )
 }
+
+/** "10" for whole counts, "3.3" otherwise. */
+private fun formatFreq(v: Double): String =
+    if (v == v.toLong().toDouble()) v.toLong().toString() else "%.1f".format(v)
 
 @Composable
 private fun QuickRange(label: String, onClick: () -> Unit) {

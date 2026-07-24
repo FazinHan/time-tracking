@@ -80,9 +80,10 @@ data class CalendarState(
 )
 
 /**
- * Result of the frequency tool. Averages are taken over [activeDays] — the
- * number of distinct calendar days that actually had a session — so idle days
- * in the range don't dilute the frequency.
+ * Result of the frequency tool. Each frequency is sessions ÷ the number of
+ * distinct *active* periods of that granularity (days/weeks/months/years that
+ * actually had a session), so empty periods never dilute the count. Time spent
+ * is reported separately as a full-year projection over the selected span.
  */
 data class FreqResult(
     val activityId: Int,
@@ -91,6 +92,9 @@ data class FreqResult(
     val sessions: Int,
     val totalSeconds: Long,
     val activeDays: Int,
+    val activeWeeks: Int,
+    val activeMonths: Int,
+    val activeYears: Int,
 )
 
 /** Tools screen state. Currently hosts the frequency calculator. */
@@ -493,10 +497,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 ).filter { it.activity == activityId }
                 val now = System.currentTimeMillis()
                 val total = entries.sumOf { entrySeconds(it.begin, it.end, it.duration, now) }
-                val activeDays = entries.mapNotNull { entryLocalDate(it.begin) }.distinct().size
+                val dates = entries.mapNotNull { entryLocalDate(it.begin) }
+                val activeDays = dates.distinct().size
+                val activeWeeks = dates.map { it.with(DayOfWeek.MONDAY) }.distinct().size
+                val activeMonths = dates.map { it.withDayOfMonth(1) }.distinct().size
+                val activeYears = dates.map { it.year }.distinct().size
                 _tools.value = _tools.value.copy(
                     computing = false,
-                    freqResult = FreqResult(activityId, from, to, entries.size, total, activeDays),
+                    freqResult = FreqResult(
+                        activityId, from, to, entries.size, total,
+                        activeDays, activeWeeks, activeMonths, activeYears,
+                    ),
                 )
             } catch (e: Exception) {
                 _tools.value = _tools.value.copy(computing = false, error = friendly(e))
