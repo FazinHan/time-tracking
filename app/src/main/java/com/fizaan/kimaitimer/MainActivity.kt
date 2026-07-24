@@ -115,6 +115,7 @@ class MainActivity : ComponentActivity() {
                                 onPeriod = vm::setPeriod,
                                 onRefresh = vm::loadViz,
                                 onClearError = vm::clearVizError,
+                                onLegendClick = vm::openSheetFiltered,
                             )
                             AppScreen.SHEET -> SheetScreen(
                                 state = sheet,
@@ -124,6 +125,11 @@ class MainActivity : ComponentActivity() {
                                 onDismissEdit = vm::dismissEdit,
                                 onSave = vm::saveEdit,
                                 onClearError = vm::clearSheetError,
+                                onSetActivityFilter = vm::setSheetActivityFilter,
+                                onSetTagFilter = vm::setSheetTagFilter,
+                                onSetPeriod = vm::setSheetPeriod,
+                                onSetDate = vm::setSheetDate,
+                                onClearFilters = vm::clearSheetFilters,
                             )
                         }
                     }

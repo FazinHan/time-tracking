@@ -28,6 +28,10 @@ enum class AppScreen { TIMER, VIZ, SHEET }
 enum class VizTab { PIE, BAR }
 enum class PieMode { ACTIVITY, TAG }
 enum class VizPeriod { DAY, WEEK, MONTH, YEAR }
+enum class SheetPeriod { ALL, DAY, WEEK, MONTH, YEAR, CUSTOM }
+
+/** Sentinel tag filter meaning "entries with no tags". */
+const val UNTAGGED = ""
 
 /** Visualisation screen state. Entries are refetched on every open/change. */
 data class VizState(
@@ -48,8 +52,16 @@ data class SheetState(
     val saving: Boolean = false,
     val entries: List<TimesheetEntry> = emptyList(),
     val activities: List<Activity> = emptyList(),
+    val allTags: List<String> = emptyList(),
     val colorChoices: Map<String, String> = emptyMap(),   // server palette, name → hex
     val editing: TimesheetEntry? = null,
+    // Filters. A null activity/tag/range means "no filter"; tag == UNTAGGED
+    // matches entries without tags. from/to are inclusive calendar days.
+    val filterActivityId: Int? = null,
+    val filterTag: String? = null,
+    val filterFrom: LocalDate? = null,
+    val filterTo: LocalDate? = null,
+    val filterPreset: SheetPeriod = SheetPeriod.ALL,
 )
 
 /** Whole-app UI state. */
@@ -406,8 +418,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 val acts = api().activities()
                 val colors = try { api().configColors() } catch (e: Exception) { _sheet.value.colorChoices }
+                val tags = try { api().tags() } catch (e: Exception) { _sheet.value.allTags }
                 _sheet.value = _sheet.value.copy(
-                    loading = false, entries = entries, activities = acts, colorChoices = colors,
+                    loading = false, entries = entries, activities = acts,
+                    colorChoices = colors, allTags = tags,
                 )
             } catch (e: Exception) {
                 _sheet.value = _sheet.value.copy(loading = false, error = friendly(e))
@@ -418,10 +432,64 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun openEdit(entry: TimesheetEntry) { _sheet.value = _sheet.value.copy(editing = entry) }
     fun dismissEdit() { _sheet.value = _sheet.value.copy(editing = null) }
 
+    // ---------------- Timesheet filters ----------------
+
+    fun setSheetActivityFilter(id: Int?) {
+        _sheet.value = _sheet.value.copy(filterActivityId = id)
+    }
+
+    fun setSheetTagFilter(tag: String?) {
+        _sheet.value = _sheet.value.copy(filterTag = tag)
+    }
+
+    /** Apply a calendar preset (today / this week / this month / this year / all). */
+    fun setSheetPeriod(preset: SheetPeriod) {
+        val today = LocalDate.now()
+        val from = when (preset) {
+            SheetPeriod.ALL, SheetPeriod.CUSTOM -> null
+            SheetPeriod.DAY -> today
+            SheetPeriod.WEEK -> today.with(DayOfWeek.MONDAY)
+            SheetPeriod.MONTH -> today.withDayOfMonth(1)
+            SheetPeriod.YEAR -> today.withDayOfYear(1)
+        }
+        _sheet.value = _sheet.value.copy(
+            filterPreset = if (preset == SheetPeriod.CUSTOM) SheetPeriod.ALL else preset,
+            filterFrom = from,
+            filterTo = if (from == null) null else today,
+        )
+    }
+
+    /** Filter to one specific calendar day. */
+    fun setSheetDate(date: LocalDate) {
+        _sheet.value = _sheet.value.copy(
+            filterPreset = SheetPeriod.CUSTOM, filterFrom = date, filterTo = date,
+        )
+    }
+
+    fun clearSheetFilters() {
+        _sheet.value = _sheet.value.copy(
+            filterActivityId = null, filterTag = null,
+            filterFrom = null, filterTo = null, filterPreset = SheetPeriod.ALL,
+        )
+    }
+
+    /**
+     * Jump from a chart legend to the timesheet with the clicked activity/tag
+     * and the chart's visible date window pre-applied.
+     */
+    fun openSheetFiltered(activityId: Int?, tag: String?, from: LocalDate, to: LocalDate) {
+        _sheet.value = _sheet.value.copy(
+            filterActivityId = activityId, filterTag = tag,
+            filterFrom = from, filterTo = to, filterPreset = SheetPeriod.CUSTOM,
+        )
+        navigate(AppScreen.SHEET)
+    }
+
     /**
      * Persist an edit: optionally recolor the activity (server-wide), then
-     * update the entry's begin/end. A null [endIso] leaves the end untouched
-     * (running entries stay running unless an end is explicitly set).
+     * update the entry's begin/end/description/tags. A null [endIso] leaves the
+     * end untouched (running entries stay running unless an end is explicitly
+     * set). description and tags are always sent — empty strings clear them.
      */
     fun saveEdit(
         entryId: Int,
@@ -429,6 +497,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         beginIso: String,
         endIso: String?,
         newColor: String?,
+        description: String,
+        tags: String,
     ) {
         _sheet.value = _sheet.value.copy(saving = true, error = null)
         viewModelScope.launch {
@@ -436,7 +506,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (newColor != null) {
                     api().updateActivityColor(activityId, ActivityColorUpdate(color = newColor))
                 }
-                api().updateTimesheet(entryId, TimesheetUpdate(begin = beginIso, end = endIso))
+                api().updateTimesheet(
+                    entryId,
+                    TimesheetUpdate(
+                        begin = beginIso, end = endIso,
+                        description = description, tags = tags,
+                    ),
+                )
                 _sheet.value = _sheet.value.copy(saving = false, editing = null)
                 loadSheet()
             } catch (e: Exception) {

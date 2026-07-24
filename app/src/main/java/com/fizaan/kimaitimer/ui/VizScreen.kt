@@ -3,6 +3,7 @@ package com.fizaan.kimaitimer.ui
 import android.content.res.Configuration
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -64,12 +66,24 @@ import com.fizaan.kimaitimer.util.entryLocalDate
 import com.fizaan.kimaitimer.util.entrySeconds
 import com.fizaan.kimaitimer.util.formatDuration
 import kotlinx.coroutines.delay
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import kotlin.math.ceil
 import kotlin.math.min
 
-data class Slice(val label: String, val color: Color, val seconds: Long)
+/**
+ * One drawable share of a chart. [activityId]/[tag] identify what was
+ * aggregated so legend clicks can open the timesheet pre-filtered
+ * (tag == UNTAGGED for the untagged bucket).
+ */
+data class Slice(
+    val label: String,
+    val color: Color,
+    val seconds: Long,
+    val activityId: Int? = null,
+    val tag: String? = null,
+)
 
 private data class DayStack(val date: LocalDate, val segments: List<Slice>, val total: Long)
 
@@ -82,6 +96,7 @@ fun VizScreen(
     onPeriod: (VizPeriod) -> Unit,
     onRefresh: () -> Unit,
     onClearError: () -> Unit,
+    onLegendClick: (activityId: Int?, tag: String?, from: LocalDate, to: LocalDate) -> Unit,
 ) {
     // Live clock so running entries keep growing while the screen is open.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -135,8 +150,8 @@ fun VizScreen(
 
         Box(modifier = Modifier.weight(1f)) {
             when (state.tab) {
-                VizTab.PIE -> PieTab(state, now, onPieMode, onPeriod)
-                VizTab.BAR -> BarTab(state, now)
+                VizTab.PIE -> PieTab(state, now, onPieMode, onPeriod, onLegendClick)
+                VizTab.BAR -> BarTab(state, now, onLegendClick)
             }
             if (state.loading) {
                 CircularProgressIndicator(
@@ -176,6 +191,7 @@ private fun computeSlices(
                     label = activities.firstOrNull { it.id == actId }?.name ?: "#$actId",
                     color = colorForActivity(actId, activities),
                     seconds = list.sumOf { entrySeconds(it.begin, it.end, it.duration, now) },
+                    activityId = actId,
                 )
             }
         PieMode.TAG -> {
@@ -187,10 +203,19 @@ private fun computeSlices(
                         label = tag.ifBlank { "untagged" },
                         color = colorForTag(tag, allTags),
                         seconds = list.sumOf { entrySeconds(it.begin, it.end, it.duration, now) },
+                        tag = tag,
                     )
                 }
         }
     }.filter { it.seconds > 0 }.sortedByDescending { it.seconds }
+}
+
+/** First day of the pie's currently selected period (through today). */
+private fun periodFrom(period: VizPeriod, today: LocalDate): LocalDate = when (period) {
+    VizPeriod.DAY -> today
+    VizPeriod.WEEK -> today.with(DayOfWeek.MONDAY)
+    VizPeriod.MONTH -> today.withDayOfMonth(1)
+    VizPeriod.YEAR -> today.withDayOfYear(1)
 }
 
 @Composable
@@ -199,11 +224,18 @@ private fun PieTab(
     now: Long,
     onPieMode: (PieMode) -> Unit,
     onPeriod: (VizPeriod) -> Unit,
+    onLegendClick: (activityId: Int?, tag: String?, from: LocalDate, to: LocalDate) -> Unit,
 ) {
     val slices = remember(state.pieEntries, state.activities, state.pieMode, now) {
         computeSlices(state.pieEntries, state.activities, state.pieMode, now)
     }
     val total = slices.sumOf { it.seconds }
+    // 'life things' stays out of the drawn pie (it plays no part in the
+    // productivity score) but keeps its legend row below.
+    val drawnSlices = remember(slices, state.pieMode) {
+        if (state.pieMode == PieMode.TAG) slices.filterNot { it.tag == "life things" } else slices
+    }
+    val drawnTotal = drawnSlices.sumOf { it.seconds }
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Column(
@@ -227,15 +259,19 @@ private fun PieTab(
                 val classified = productive + unproductive + semiProductive
                 if (state.pieMode == PieMode.TAG && classified > 0) {
                     PieChart(
-                        slices, total,
+                        drawnSlices, drawnTotal,
                         centerLabel = "${((productive + semiProductive * 0.5f) * 100f / classified + 0.5f).toInt()}%",
                         centerSub = "productive",
                     )
                 } else {
-                    PieChart(slices, total, centerLabel = formatDuration(total), centerSub = "total")
+                    PieChart(drawnSlices, drawnTotal, centerLabel = formatDuration(total), centerSub = "total")
                 }
                 Spacer(Modifier.height(20.dp))
-                slices.forEach { s -> LegendRow(s, total) }
+                val today = LocalDate.now()
+                val from = periodFrom(state.period, today)
+                slices.forEach { s ->
+                    LegendRow(s, total) { onLegendClick(s.activityId, s.tag, from, today) }
+                }
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -310,9 +346,9 @@ private fun PieChart(slices: List<Slice>, total: Long, centerLabel: String, cent
 }
 
 @Composable
-private fun LegendRow(s: Slice, total: Long) {
+private fun LegendRow(s: Slice, total: Long, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(12.dp).background(s.color, CircleShape))
@@ -343,7 +379,11 @@ private fun LegendRow(s: Slice, total: Long) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun BarTab(state: VizState, now: Long) {
+private fun BarTab(
+    state: VizState,
+    now: Long,
+    onLegendClick: (activityId: Int?, tag: String?, from: LocalDate, to: LocalDate) -> Unit,
+) {
     val days = remember(state.barEntries, state.activities, now) {
         buildDayStacks(state.barEntries, state.activities, now)
     }
@@ -353,6 +393,7 @@ private fun BarTab(state: VizState, now: Long) {
         LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val visibleDays = if (landscape) 7 else 3
     val dateFmt = remember { DateTimeFormatter.ofPattern("EEE d/M") }
+    val listState = rememberLazyListState()
 
     // Legend: only activities that actually appear in the window.
     val legendActs = remember(state.barEntries, state.activities) {
@@ -386,7 +427,7 @@ private fun BarTab(state: VizState, now: Long) {
                     }
                 }
                 // Newest day docked at the right edge; scroll left into history.
-                LazyRow(modifier = Modifier.weight(1f), reverseLayout = true) {
+                LazyRow(state = listState, modifier = Modifier.weight(1f), reverseLayout = true) {
                     items(days.size) { i ->
                         val day = days[days.size - 1 - i]
                         DayColumn(day, slotW, chartH, labelH, niceMaxH, dateFmt)
@@ -401,7 +442,20 @@ private fun BarTab(state: VizState, now: Long) {
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 legendActs.forEach { act ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable {
+                            // Filter to the days currently on screen: the list is
+                            // reversed, so the first visible item is the newest
+                            // visible day, and the window extends back from it.
+                            val newest = days.getOrNull(days.size - 1 - listState.firstVisibleItemIndex)
+                                ?.date ?: LocalDate.now()
+                            onLegendClick(
+                                act.id, null,
+                                newest.minusDays((visibleDays - 1).toLong()), newest,
+                            )
+                        },
+                    ) {
                         Box(
                             Modifier.size(10.dp)
                                 .background(colorForActivity(act.id, state.activities), CircleShape)

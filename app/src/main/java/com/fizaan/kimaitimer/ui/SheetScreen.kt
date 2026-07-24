@@ -16,19 +16,25 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +50,7 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -52,7 +59,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.fizaan.kimaitimer.SheetPeriod
 import com.fizaan.kimaitimer.SheetState
+import com.fizaan.kimaitimer.UNTAGGED
 import com.fizaan.kimaitimer.data.Activity
 import com.fizaan.kimaitimer.data.TimesheetEntry
 import com.fizaan.kimaitimer.util.entrySeconds
@@ -72,16 +81,24 @@ fun SheetScreen(
     onRefresh: () -> Unit,
     onOpenEdit: (TimesheetEntry) -> Unit,
     onDismissEdit: () -> Unit,
-    onSave: (entryId: Int, activityId: Int, beginIso: String, endIso: String?, newColor: String?) -> Unit,
+    onSave: (entryId: Int, activityId: Int, beginIso: String, endIso: String?, newColor: String?, description: String, tags: String) -> Unit,
     onClearError: () -> Unit,
+    onSetActivityFilter: (Int?) -> Unit,
+    onSetTagFilter: (String?) -> Unit,
+    onSetPeriod: (SheetPeriod) -> Unit,
+    onSetDate: (LocalDate) -> Unit,
+    onClearFilters: () -> Unit,
 ) {
     val dayFmt = remember { DateTimeFormatter.ofPattern("EEEE, d MMM yyyy") }
     val timeFmt = remember { DateTimeFormatter.ofPattern("HH:mm") }
     val now = System.currentTimeMillis()
 
-    // Group by calendar day, newest first.
-    val grouped = remember(state.entries) {
+    // Apply filters, then group by calendar day, newest first.
+    val grouped = remember(
+        state.entries, state.filterActivityId, state.filterTag, state.filterFrom, state.filterTo,
+    ) {
         state.entries
+            .filter { e -> entryMatchesFilters(e, state) }
             .sortedByDescending { it.begin }
             .groupBy { parseKimaiLocal(it.begin)?.toLocalDate() ?: LocalDate.MIN }
             .toList()
@@ -111,8 +128,26 @@ fun SheetScreen(
             }
         }
 
+        FilterBar(
+            state = state,
+            onSetActivityFilter = onSetActivityFilter,
+            onSetTagFilter = onSetTagFilter,
+            onSetPeriod = onSetPeriod,
+            onSetDate = onSetDate,
+            onClearFilters = onClearFilters,
+        )
+
         Box(modifier = Modifier.weight(1f)) {
             LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                if (grouped.isEmpty() && !state.loading) {
+                    item {
+                        Text(
+                            "No entries match the current filters.",
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(top = 32.dp),
+                        )
+                    }
+                }
                 grouped.forEach { (date, entries) ->
                     item(key = "h$date") {
                         Text(
@@ -159,11 +194,176 @@ fun SheetScreen(
         EditEntryDialog(
             entry = entry,
             activities = state.activities,
+            allTags = state.allTags,
             colorChoices = state.colorChoices,
             saving = state.saving,
             onSave = onSave,
             onDismiss = onDismissEdit,
         )
+    }
+}
+
+private fun entryMatchesFilters(e: TimesheetEntry, state: SheetState): Boolean {
+    if (state.filterActivityId != null && e.activity != state.filterActivityId) return false
+    state.filterTag?.let { wanted ->
+        val tags = e.tags?.filter { it.isNotBlank() }.orEmpty()
+        val ok = if (wanted == UNTAGGED) tags.isEmpty() else tags.contains(wanted)
+        if (!ok) return false
+    }
+    if (state.filterFrom != null || state.filterTo != null) {
+        val d = parseKimaiLocal(e.begin)?.toLocalDate() ?: return false
+        if (state.filterFrom != null && d.isBefore(state.filterFrom)) return false
+        if (state.filterTo != null && d.isAfter(state.filterTo)) return false
+    }
+    return true
+}
+
+// ---------------- Filter bar ----------------
+
+@Composable
+private fun FilterBar(
+    state: SheetState,
+    onSetActivityFilter: (Int?) -> Unit,
+    onSetTagFilter: (String?) -> Unit,
+    onSetPeriod: (SheetPeriod) -> Unit,
+    onSetDate: (LocalDate) -> Unit,
+    onClearFilters: () -> Unit,
+) {
+    var actMenu by remember { mutableStateOf(false) }
+    var tagMenu by remember { mutableStateOf(false) }
+    var periodMenu by remember { mutableStateOf(false) }
+    var pickDate by remember { mutableStateOf(false) }
+    val rangeFmt = remember { DateTimeFormatter.ofPattern("d MMM") }
+
+    val anyFilter = state.filterActivityId != null || state.filterTag != null ||
+        state.filterFrom != null || state.filterTo != null
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box {
+            val actName = state.activities.firstOrNull { it.id == state.filterActivityId }?.name
+            FilterChip(
+                selected = state.filterActivityId != null,
+                onClick = { actMenu = true },
+                label = { Text(actName ?: "Activity") },
+                trailingIcon = { Icon(Icons.Filled.ArrowDropDown, null) },
+            )
+            DropdownMenu(expanded = actMenu, onDismissRequest = { actMenu = false }) {
+                DropdownMenuItem(
+                    text = { Text("All activities") },
+                    onClick = { onSetActivityFilter(null); actMenu = false },
+                )
+                state.activities.sortedBy { it.name.lowercase() }.forEach { a ->
+                    DropdownMenuItem(
+                        text = { Text(a.name) },
+                        onClick = { onSetActivityFilter(a.id); actMenu = false },
+                    )
+                }
+            }
+        }
+
+        Box {
+            val tagLabel = when (state.filterTag) {
+                null -> "Tag"
+                UNTAGGED -> "untagged"
+                else -> state.filterTag
+            }
+            FilterChip(
+                selected = state.filterTag != null,
+                onClick = { tagMenu = true },
+                label = { Text(tagLabel) },
+                trailingIcon = { Icon(Icons.Filled.ArrowDropDown, null) },
+            )
+            DropdownMenu(expanded = tagMenu, onDismissRequest = { tagMenu = false }) {
+                DropdownMenuItem(
+                    text = { Text("All tags") },
+                    onClick = { onSetTagFilter(null); tagMenu = false },
+                )
+                state.allTags.forEach { t ->
+                    DropdownMenuItem(
+                        text = { Text(t) },
+                        onClick = { onSetTagFilter(t); tagMenu = false },
+                    )
+                }
+                DropdownMenuItem(
+                    text = { Text("untagged") },
+                    onClick = { onSetTagFilter(UNTAGGED); tagMenu = false },
+                )
+            }
+        }
+
+        Box {
+            val periodLabel = when (state.filterPreset) {
+                SheetPeriod.ALL -> "Period"
+                SheetPeriod.DAY -> "Today"
+                SheetPeriod.WEEK -> "This week"
+                SheetPeriod.MONTH -> "This month"
+                SheetPeriod.YEAR -> "This year"
+                SheetPeriod.CUSTOM -> {
+                    val f = state.filterFrom
+                    val t = state.filterTo
+                    when {
+                        f != null && t != null && f == t -> f.format(rangeFmt)
+                        f != null && t != null -> "${f.format(rangeFmt)} – ${t.format(rangeFmt)}"
+                        else -> "Custom"
+                    }
+                }
+            }
+            FilterChip(
+                selected = state.filterPreset != SheetPeriod.ALL,
+                onClick = { periodMenu = true },
+                label = { Text(periodLabel) },
+                trailingIcon = { Icon(Icons.Filled.ArrowDropDown, null) },
+            )
+            DropdownMenu(expanded = periodMenu, onDismissRequest = { periodMenu = false }) {
+                DropdownMenuItem(
+                    text = { Text("All time") },
+                    onClick = { onSetPeriod(SheetPeriod.ALL); periodMenu = false },
+                )
+                DropdownMenuItem(
+                    text = { Text("Today") },
+                    onClick = { onSetPeriod(SheetPeriod.DAY); periodMenu = false },
+                )
+                DropdownMenuItem(
+                    text = { Text("This week") },
+                    onClick = { onSetPeriod(SheetPeriod.WEEK); periodMenu = false },
+                )
+                DropdownMenuItem(
+                    text = { Text("This month") },
+                    onClick = { onSetPeriod(SheetPeriod.MONTH); periodMenu = false },
+                )
+                DropdownMenuItem(
+                    text = { Text("This year") },
+                    onClick = { onSetPeriod(SheetPeriod.YEAR); periodMenu = false },
+                )
+                DropdownMenuItem(
+                    text = { Text("Pick date…") },
+                    onClick = { periodMenu = false; pickDate = true },
+                )
+            }
+        }
+
+        if (anyFilter) {
+            IconButton(onClick = onClearFilters) {
+                Icon(
+                    Icons.Filled.Close, "Clear filters",
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                )
+            }
+        }
+    }
+
+    if (pickDate) {
+        DateDialog(
+            initial = state.filterFrom ?: LocalDate.now(),
+            onDismiss = { pickDate = false },
+        ) { d -> onSetDate(d) }
     }
 }
 
@@ -203,6 +403,14 @@ private fun EntryRow(
                     text = tags.joinToString(" · "),
                     fontSize = 11.sp,
                     color = KimaiGreen,
+                )
+            }
+            if (!entry.description.isNullOrBlank()) {
+                Text(
+                    text = entry.description,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                    maxLines = 1,
                 )
             }
         }
@@ -251,9 +459,10 @@ private val DefaultColorChoices = mapOf(
 private fun EditEntryDialog(
     entry: TimesheetEntry,
     activities: List<Activity>,
+    allTags: List<String>,
     colorChoices: Map<String, String>,
     saving: Boolean,
-    onSave: (entryId: Int, activityId: Int, beginIso: String, endIso: String?, newColor: String?) -> Unit,
+    onSave: (entryId: Int, activityId: Int, beginIso: String, endIso: String?, newColor: String?, description: String, tags: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val act = activities.firstOrNull { it.id == entry.activity }
@@ -263,6 +472,12 @@ private fun EditEntryDialog(
         mutableStateOf(parseKimaiLocal(entry.begin) ?: LocalDateTime.now())
     }
     var end by remember(entry.id) { mutableStateOf(parseKimaiLocal(entry.end)) }
+    var description by remember(entry.id) { mutableStateOf(entry.description ?: "") }
+    val selectedTags = remember(entry.id) {
+        mutableStateListOf<String>().apply {
+            addAll(entry.tags?.filter { it.isNotBlank() }.orEmpty())
+        }
+    }
     var useDuration by remember(entry.id) { mutableStateOf(false) }
     var durationText by remember(entry.id) {
         val secs = entrySeconds(entry.begin, entry.end, entry.duration, System.currentTimeMillis())
@@ -344,6 +559,42 @@ private fun EditEntryDialog(
                 }
 
                 Spacer(Modifier.height(14.dp))
+                FieldLabel("Description")
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    placeholder = { Text("What was this?") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 1,
+                    maxLines = 3,
+                )
+
+                Spacer(Modifier.height(14.dp))
+                FieldLabel("Tags")
+                if (allTags.isEmpty()) {
+                    Text(
+                        "No tags on the server yet.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    )
+                } else {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        allTags.forEach { tag ->
+                            val isSel = selectedTags.contains(tag)
+                            FilterChip(
+                                selected = isSel,
+                                onClick = {
+                                    if (isSel) selectedTags.remove(tag) else selectedTags.add(tag)
+                                },
+                                label = { Text(tag) },
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
                 FieldLabel("Activity colour (applies everywhere)")
                 val swatches = colorChoices.ifEmpty { DefaultColorChoices }
                 FlowRow(
@@ -380,7 +631,10 @@ private fun EditEntryDialog(
                     }
                     val newColor =
                         colorHex?.takeIf { !it.equals(act?.color, ignoreCase = true) }
-                    onSave(entry.id, entry.activity, formatKimai(begin), endIso, newColor)
+                    onSave(
+                        entry.id, entry.activity, formatKimai(begin), endIso, newColor,
+                        description.trim(), selectedTags.joinToString(","),
+                    )
                 },
             ) { Text(if (saving) "Saving…" else "Save") }
         },

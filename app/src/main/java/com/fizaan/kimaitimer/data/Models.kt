@@ -92,6 +92,8 @@ data class ActivityCreate(
 data class TimesheetUpdate(
     val begin: String,
     val end: String? = null,
+    val description: String? = null,
+    val tags: String? = null,
 )
 
 data class ActivityColorUpdate(
