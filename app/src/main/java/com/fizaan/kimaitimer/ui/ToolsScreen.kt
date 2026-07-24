@@ -53,6 +53,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 
 /** Which tool is currently open within the Tools section. */
 private enum class Tool { NONE, FREQUENCY }
@@ -264,17 +265,21 @@ private fun FrequencyTool(
 
 @Composable
 private fun ResultCard(r: FreqResult) {
-    // Averages are over active days only — days with no session are excluded.
-    val days = r.activeDays
-    if (days <= 0) return
-    val d = days.toDouble()
-    // (label, per-period session count, per-period duration seconds)
+    val active = r.activeDays
+    if (active <= 0) return
+    // Daily frequency is per *active* day (idle days excluded). Weekly/monthly/
+    // yearly are calendar rates over the full span, so gaps between sessions
+    // count against them.
+    val span = (ChronoUnit.DAYS.between(r.from, r.to) + 1).coerceAtLeast(1).toDouble()
+    val yearlyFactor = 365.25 / span
     val rows = listOf(
-        Triple("Daily", r.sessions / d, (r.totalSeconds / d)),
-        Triple("Weekly", r.sessions / (d / 7.0), (r.totalSeconds / (d / 7.0))),
-        Triple("Monthly", r.sessions / (d / 30.4375), (r.totalSeconds / (d / 30.4375))),
-        Triple("Yearly", r.sessions / (d / 365.25), (r.totalSeconds / (d / 365.25))),
+        "Daily" to r.sessions / active.toDouble(),
+        "Weekly" to r.sessions / (span / 7.0),
+        "Monthly" to r.sessions / (span / 30.4375),
+        "Yearly" to r.sessions * yearlyFactor,
     )
+    // Time actually spent, projected to a full year over the same span.
+    val yearlySeconds = (r.totalSeconds * yearlyFactor).toLong()
 
     Column(
         modifier = Modifier
@@ -286,27 +291,47 @@ private fun ResultCard(r: FreqResult) {
             .padding(16.dp),
     ) {
         Text(
-            "Over $days active day${if (days == 1) "" else "s"}: ${r.sessions} session" +
+            "Over $active active day${if (active == 1) "" else "s"}: ${r.sessions} session" +
                 "${if (r.sessions == 1) "" else "s"}, ${formatDuration(r.totalSeconds)} total",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
         )
         Spacer(Modifier.height(12.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
-            HeaderCell("Average", 1.1f)
-            HeaderCell("Frequency", 1.2f)
-            HeaderCell("Duration", 1.2f)
+            HeaderCell("Average", 1f)
+            HeaderCell("Frequency", 1f)
         }
         androidx.compose.material3.Divider(
             modifier = Modifier.padding(vertical = 4.dp),
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f),
         )
-        rows.forEach { (label, count, secs) ->
+        rows.forEach { (label, count) ->
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                BodyCell(label, 1.1f, bold = true)
-                BodyCell("%.1f".format(count), 1.2f)
-                BodyCell(formatDuration(secs.toLong()), 1.2f)
+                BodyCell(label, 1f, bold = true)
+                BodyCell("%.1f".format(count), 1f)
             }
+        }
+        androidx.compose.material3.Divider(
+            modifier = Modifier.padding(vertical = 4.dp),
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Projected yearly time",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                formatDuration(yearlySeconds),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = KimaiGreen,
+            )
         }
     }
 }
