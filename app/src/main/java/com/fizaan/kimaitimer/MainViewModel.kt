@@ -14,6 +14,7 @@ import com.fizaan.kimaitimer.data.TimesheetActive
 import com.fizaan.kimaitimer.data.TimesheetCreate
 import com.fizaan.kimaitimer.data.TimesheetEntry
 import com.fizaan.kimaitimer.data.TimesheetUpdate
+import com.fizaan.kimaitimer.util.entryLocalDate
 import com.fizaan.kimaitimer.util.entrySeconds
 import com.fizaan.kimaitimer.util.formatKimai
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -78,13 +79,18 @@ data class CalendarState(
     val activities: List<Activity> = emptyList(),
 )
 
-/** Result of the frequency tool: totals over [from]..[to] plus session count. */
+/**
+ * Result of the frequency tool. Averages are taken over [activeDays] — the
+ * number of distinct calendar days that actually had a session — so idle days
+ * in the range don't dilute the frequency.
+ */
 data class FreqResult(
     val activityId: Int,
     val from: LocalDate,
     val to: LocalDate,
     val sessions: Int,
     val totalSeconds: Long,
+    val activeDays: Int,
 )
 
 /** Tools screen state. Currently hosts the frequency calculator. */
@@ -487,9 +493,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 ).filter { it.activity == activityId }
                 val now = System.currentTimeMillis()
                 val total = entries.sumOf { entrySeconds(it.begin, it.end, it.duration, now) }
+                val activeDays = entries.mapNotNull { entryLocalDate(it.begin) }.distinct().size
                 _tools.value = _tools.value.copy(
                     computing = false,
-                    freqResult = FreqResult(activityId, from, to, entries.size, total),
+                    freqResult = FreqResult(activityId, from, to, entries.size, total, activeDays),
                 )
             } catch (e: Exception) {
                 _tools.value = _tools.value.copy(computing = false, error = friendly(e))

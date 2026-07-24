@@ -53,7 +53,6 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
-import java.time.temporal.ChronoUnit
 
 /** Which tool is currently open within the Tools section. */
 private enum class Tool { NONE, FREQUENCY }
@@ -265,7 +264,8 @@ private fun FrequencyTool(
 
 @Composable
 private fun ResultCard(r: FreqResult) {
-    val days = ChronoUnit.DAYS.between(r.from, r.to) + 1
+    // Averages are over active days only — days with no session are excluded.
+    val days = r.activeDays
     if (days <= 0) return
     val d = days.toDouble()
     // (label, per-period session count, per-period duration seconds)
@@ -286,7 +286,7 @@ private fun ResultCard(r: FreqResult) {
             .padding(16.dp),
     ) {
         Text(
-            "Over $days day${if (days == 1L) "" else "s"}: ${r.sessions} session" +
+            "Over $days active day${if (days == 1) "" else "s"}: ${r.sessions} session" +
                 "${if (r.sessions == 1) "" else "s"}, ${formatDuration(r.totalSeconds)} total",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
@@ -294,7 +294,7 @@ private fun ResultCard(r: FreqResult) {
         Spacer(Modifier.height(12.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
             HeaderCell("Average", 1.1f)
-            HeaderCell("Times", 1f)
+            HeaderCell("Frequency", 1.2f)
             HeaderCell("Duration", 1.2f)
         }
         androidx.compose.material3.Divider(
@@ -304,7 +304,7 @@ private fun ResultCard(r: FreqResult) {
         rows.forEach { (label, count, secs) ->
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                 BodyCell(label, 1.1f, bold = true)
-                BodyCell("%.1f×".format(count), 1f)
+                BodyCell("%.1f".format(count), 1.2f)
                 BodyCell(formatDuration(secs.toLong()), 1.2f)
             }
         }
