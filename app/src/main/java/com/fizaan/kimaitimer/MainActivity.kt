@@ -7,6 +7,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.PieChart
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.DrawerValue
@@ -23,10 +25,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.fizaan.kimaitimer.ui.CalendarScreen
 import com.fizaan.kimaitimer.ui.KimaiTimerTheme
 import com.fizaan.kimaitimer.ui.MainScreen
 import com.fizaan.kimaitimer.ui.SetupScreen
 import com.fizaan.kimaitimer.ui.SheetScreen
+import com.fizaan.kimaitimer.ui.ToolsScreen
 import com.fizaan.kimaitimer.ui.VizScreen
 import kotlinx.coroutines.launch
 
@@ -43,6 +47,8 @@ class MainActivity : ComponentActivity() {
                 val setup by vm.setup.collectAsState()
                 val viz by vm.viz.collectAsState()
                 val sheet by vm.sheet.collectAsState()
+                val calendar by vm.calendar.collectAsState()
+                val tools by vm.tools.collectAsState()
 
                 if (!ui.configured) {
                     SetupScreen(
@@ -64,6 +70,8 @@ class MainActivity : ComponentActivity() {
                         Dest(AppScreen.TIMER, "Timer", Icons.Filled.Timer),
                         Dest(AppScreen.VIZ, "Visualisations", Icons.Filled.PieChart),
                         Dest(AppScreen.SHEET, "Timesheet", Icons.AutoMirrored.Filled.List),
+                        Dest(AppScreen.CALENDAR, "Calendar", Icons.Filled.CalendarMonth),
+                        Dest(AppScreen.TOOLS, "Tools", Icons.Filled.Build),
                     )
                     ModalNavigationDrawer(
                         drawerState = drawerState,
@@ -130,6 +138,23 @@ class MainActivity : ComponentActivity() {
                                 onSetPeriod = vm::setSheetPeriod,
                                 onSetDate = vm::setSheetDate,
                                 onClearFilters = vm::clearSheetFilters,
+                            )
+                            AppScreen.CALENDAR -> CalendarScreen(
+                                state = calendar,
+                                onMenu = openDrawer,
+                                onRefresh = vm::loadCalendar,
+                                onShift = vm::shiftCalendar,
+                                onToday = vm::calendarToday,
+                                onClearError = vm::clearCalendarError,
+                            )
+                            AppScreen.TOOLS -> ToolsScreen(
+                                state = tools,
+                                onMenu = openDrawer,
+                                onSetFreqActivity = vm::setFreqActivity,
+                                onSetFreqFrom = vm::setFreqFrom,
+                                onSetFreqTo = vm::setFreqTo,
+                                onCompute = vm::computeFrequency,
+                                onClearError = vm::clearToolsError,
                             )
                         }
                     }

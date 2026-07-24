@@ -14,6 +14,7 @@ import com.fizaan.kimaitimer.data.TimesheetActive
 import com.fizaan.kimaitimer.data.TimesheetCreate
 import com.fizaan.kimaitimer.data.TimesheetEntry
 import com.fizaan.kimaitimer.data.TimesheetUpdate
+import com.fizaan.kimaitimer.util.entrySeconds
 import com.fizaan.kimaitimer.util.formatKimai
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,7 +25,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
-enum class AppScreen { TIMER, VIZ, SHEET }
+enum class AppScreen { TIMER, VIZ, SHEET, CALENDAR, TOOLS }
 enum class VizTab { PIE, BAR }
 enum class PieMode { ACTIVITY, TAG }
 enum class VizPeriod { DAY, WEEK, MONTH, YEAR }
@@ -62,6 +63,40 @@ data class SheetState(
     val filterFrom: LocalDate? = null,
     val filterTo: LocalDate? = null,
     val filterPreset: SheetPeriod = SheetPeriod.ALL,
+)
+
+/**
+ * Calendar (week-view) state. [anchor] is the newest (right-most) day shown;
+ * the number of columns is decided by the screen orientation in the UI. Entries
+ * cover a padded window around the anchor so paging back a few days is instant.
+ */
+data class CalendarState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val anchor: LocalDate = LocalDate.now(),
+    val entries: List<TimesheetEntry> = emptyList(),
+    val activities: List<Activity> = emptyList(),
+)
+
+/** Result of the frequency tool: totals over [from]..[to] plus session count. */
+data class FreqResult(
+    val activityId: Int,
+    val from: LocalDate,
+    val to: LocalDate,
+    val sessions: Int,
+    val totalSeconds: Long,
+)
+
+/** Tools screen state. Currently hosts the frequency calculator. */
+data class ToolsState(
+    val loading: Boolean = false,
+    val error: String? = null,
+    val computing: Boolean = false,
+    val activities: List<Activity> = emptyList(),
+    val freqActivityId: Int? = null,
+    val freqFrom: LocalDate = LocalDate.now().minusDays(29),
+    val freqTo: LocalDate = LocalDate.now(),
+    val freqResult: FreqResult? = null,
 )
 
 /** Whole-app UI state. */
@@ -116,6 +151,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _sheet = MutableStateFlow(SheetState())
     val sheet: StateFlow<SheetState> = _sheet.asStateFlow()
+
+    private val _calendar = MutableStateFlow(CalendarState())
+    val calendar: StateFlow<CalendarState> = _calendar.asStateFlow()
+
+    private val _tools = MutableStateFlow(ToolsState())
+    val tools: StateFlow<ToolsState> = _tools.asStateFlow()
 
     init {
         if (prefs.isConfigured) {
@@ -362,8 +403,101 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             AppScreen.TIMER -> refresh()
             AppScreen.VIZ -> loadViz()
             AppScreen.SHEET -> loadSheet()
+            AppScreen.CALENDAR -> loadCalendar()
+            AppScreen.TOOLS -> loadTools()
         }
     }
+
+    // ---------------- Calendar ----------------
+
+    /** Fetch a padded window of entries around the calendar's anchor day. */
+    fun loadCalendar() {
+        _calendar.value = _calendar.value.copy(loading = true, error = null)
+        viewModelScope.launch {
+            try {
+                val anchor = _calendar.value.anchor
+                val begin = formatKimai(anchor.minusDays(7).atStartOfDay())
+                val end = formatKimai(anchor.plusDays(1).atStartOfDay())
+                val acts = api().activities()
+                val entries = api().timesheets(begin = begin, end = end)
+                _calendar.value = _calendar.value.copy(
+                    loading = false, entries = entries, activities = acts,
+                )
+            } catch (e: Exception) {
+                _calendar.value = _calendar.value.copy(loading = false, error = friendly(e))
+            }
+        }
+    }
+
+    /** Move the visible window by [days] (negative = into the past) and reload. */
+    fun shiftCalendar(days: Int) {
+        _calendar.value = _calendar.value.copy(anchor = _calendar.value.anchor.plusDays(days.toLong()))
+        loadCalendar()
+    }
+
+    fun calendarToday() {
+        _calendar.value = _calendar.value.copy(anchor = LocalDate.now())
+        loadCalendar()
+    }
+
+    fun clearCalendarError() { _calendar.value = _calendar.value.copy(error = null) }
+
+    // ---------------- Tools ----------------
+
+    fun loadTools() {
+        _tools.value = _tools.value.copy(loading = true, error = null)
+        viewModelScope.launch {
+            try {
+                val acts = api().activities().filter { it.visible }.sortedBy { it.name.lowercase() }
+                _tools.value = _tools.value.copy(loading = false, activities = acts)
+            } catch (e: Exception) {
+                _tools.value = _tools.value.copy(loading = false, error = friendly(e))
+            }
+        }
+    }
+
+    fun setFreqActivity(id: Int?) {
+        _tools.value = _tools.value.copy(freqActivityId = id, freqResult = null)
+    }
+
+    fun setFreqFrom(date: LocalDate) {
+        _tools.value = _tools.value.copy(freqFrom = date, freqResult = null)
+    }
+
+    fun setFreqTo(date: LocalDate) {
+        _tools.value = _tools.value.copy(freqTo = date, freqResult = null)
+    }
+
+    /** Sum sessions and time for the chosen activity over the chosen date range. */
+    fun computeFrequency() {
+        val s = _tools.value
+        val activityId = s.freqActivityId ?: return
+        val from = s.freqFrom
+        val to = s.freqTo
+        if (to.isBefore(from)) {
+            _tools.value = s.copy(error = "End date is before the start date.")
+            return
+        }
+        _tools.value = s.copy(computing = true, error = null)
+        viewModelScope.launch {
+            try {
+                val entries = api().timesheets(
+                    begin = formatKimai(from.atStartOfDay()),
+                    end = formatKimai(to.plusDays(1).atStartOfDay()),
+                ).filter { it.activity == activityId }
+                val now = System.currentTimeMillis()
+                val total = entries.sumOf { entrySeconds(it.begin, it.end, it.duration, now) }
+                _tools.value = _tools.value.copy(
+                    computing = false,
+                    freqResult = FreqResult(activityId, from, to, entries.size, total),
+                )
+            } catch (e: Exception) {
+                _tools.value = _tools.value.copy(computing = false, error = friendly(e))
+            }
+        }
+    }
+
+    fun clearToolsError() { _tools.value = _tools.value.copy(error = null) }
 
     // ---------------- Visualisations ----------------
 
