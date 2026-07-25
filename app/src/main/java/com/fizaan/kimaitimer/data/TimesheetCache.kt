@@ -13,7 +13,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 
 /** Hard ceiling for the on-disk cache. Oldest entries are dropped past it. */
-const val CACHE_MAX_BYTES: Long = 50L * 1024 * 1024
+const val CACHE_MAX_BYTES: Long = 20L * 1024
 
 /**
  * Everything kept on disk: every timesheet entry downloaded so far (oldest
