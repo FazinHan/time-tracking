@@ -404,8 +404,11 @@ private fun FilterBar(
 
 // ---------------- Rows ----------------
 
-/** How far a row slides left to expose its Delete button. */
+/** Width of the Delete button revealed behind a row. */
 private val DeleteActionWidth = 96.dp
+
+/** Breathing room between the row's trailing times and that button. */
+private val DeleteActionGap = 14.dp
 
 /**
  * Deleting takes three deliberate steps: swipe the row left, which parks it open
@@ -424,7 +427,9 @@ private fun SwipeToDeleteRow(
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val reveal = with(LocalDensity.current) { DeleteActionWidth.toPx() }
+    // Slide further than the button is wide, so the row's times don't end up
+    // flush against it.
+    val reveal = with(LocalDensity.current) { (DeleteActionWidth + DeleteActionGap).toPx() }
     val offsetX = remember(entry.id) { Animatable(0f) }
     val scope = rememberCoroutineScope()
 
