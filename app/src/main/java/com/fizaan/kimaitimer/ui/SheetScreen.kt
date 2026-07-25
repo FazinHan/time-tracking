@@ -1,8 +1,10 @@
 package com.fizaan.kimaitimer.ui
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,9 +12,11 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -21,10 +25,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -49,14 +55,19 @@ import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fizaan.kimaitimer.SheetPeriod
@@ -73,6 +84,8 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 @Composable
 fun SheetScreen(
@@ -82,6 +95,9 @@ fun SheetScreen(
     onOpenEdit: (TimesheetEntry) -> Unit,
     onDismissEdit: () -> Unit,
     onSave: (entryId: Int, activityId: Int, beginIso: String, endIso: String?, newColor: String?, description: String, tags: String) -> Unit,
+    onAskDelete: (TimesheetEntry) -> Unit,
+    onDismissDelete: () -> Unit,
+    onDelete: (entryId: Int) -> Unit,
     onClearError: () -> Unit,
     onSetActivityFilter: (Int?) -> Unit,
     onSetTagFilter: (String?) -> Unit,
@@ -92,6 +108,8 @@ fun SheetScreen(
     val dayFmt = remember { DateTimeFormatter.ofPattern("EEEE, d MMM yyyy") }
     val timeFmt = remember { DateTimeFormatter.ofPattern("HH:mm") }
     val now = System.currentTimeMillis()
+    // Which row is swiped open. Hoisted so only one shows its Delete button.
+    var revealedId by remember { mutableStateOf<Int?>(null) }
 
     // Apply filters, then group by calendar day, newest first.
     val grouped = remember(
@@ -160,12 +178,17 @@ fun SheetScreen(
                         )
                     }
                     items(entries.size, key = { i -> entries[i].id }) { i ->
-                        EntryRow(
-                            entry = entries[i],
+                        val entry = entries[i]
+                        SwipeToDeleteRow(
+                            entry = entry,
                             activities = state.activities,
                             timeFmt = timeFmt,
                             now = now,
-                            onClick = { onOpenEdit(entries[i]) },
+                            revealed = revealedId == entry.id,
+                            onReveal = { revealedId = entry.id },
+                            onHide = { if (revealedId == entry.id) revealedId = null },
+                            onClick = { onOpenEdit(entry) },
+                            onDelete = { revealedId = null; onAskDelete(entry) },
                         )
                     }
                 }
@@ -201,6 +224,16 @@ fun SheetScreen(
             saving = state.saving,
             onSave = onSave,
             onDismiss = onDismissEdit,
+        )
+    }
+
+    state.pendingDelete?.let { entry ->
+        DeleteConfirmDialog(
+            entry = entry,
+            activities = state.activities,
+            deleting = state.deleting,
+            onConfirm = { onDelete(entry.id) },
+            onDismiss = onDismissDelete,
         )
     }
 }
@@ -369,6 +402,80 @@ private fun FilterBar(
     }
 }
 
+// ---------------- Rows ----------------
+
+/** How far a row slides left to expose its Delete button. */
+private val DeleteActionWidth = 96.dp
+
+/**
+ * Deleting takes three deliberate steps: swipe the row left, which parks it open
+ * over a Delete button; tap that button; confirm in the dialog. Swiping back or
+ * tapping the row itself closes it again without touching anything.
+ */
+@Composable
+private fun SwipeToDeleteRow(
+    entry: TimesheetEntry,
+    activities: List<Activity>,
+    timeFmt: DateTimeFormatter,
+    now: Long,
+    revealed: Boolean,
+    onReveal: () -> Unit,
+    onHide: () -> Unit,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val reveal = with(LocalDensity.current) { DeleteActionWidth.toPx() }
+    val offsetX = remember(entry.id) { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+
+    // Follow the hoisted state, so opening one row closes whichever was open.
+    LaunchedEffect(revealed) { offsetX.animateTo(if (revealed) -reveal else 0f) }
+
+    Box(modifier = Modifier.fillMaxWidth()) {
+        // Sits behind the row; matchParentSize keeps it out of the height maths.
+        Box(modifier = Modifier.matchParentSize(), contentAlignment = Alignment.CenterEnd) {
+            Row(
+                modifier = Modifier
+                    .width(DeleteActionWidth)
+                    .fillMaxHeight()
+                    .background(KimaiRed, RoundedCornerShape(8.dp))
+                    .clickable(enabled = revealed) { onDelete() },
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Filled.Delete, "Delete entry",
+                    tint = Color.White, modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("Delete", color = Color.White, fontSize = 14.sp)
+            }
+        }
+        EntryRow(
+            entry = entry,
+            activities = activities,
+            timeFmt = timeFmt,
+            now = now,
+            onClick = { if (revealed) onHide() else onClick() },
+            modifier = Modifier
+                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+                .pointerInput(entry.id) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            val open = offsetX.value < -reveal / 2
+                            scope.launch { offsetX.animateTo(if (open) -reveal else 0f) }
+                            if (open) onReveal() else onHide()
+                        },
+                    ) { _, delta ->
+                        scope.launch {
+                            offsetX.snapTo((offsetX.value + delta).coerceIn(-reveal, 0f))
+                        }
+                    }
+                },
+        )
+    }
+}
+
 @Composable
 private fun EntryRow(
     entry: TimesheetEntry,
@@ -376,14 +483,17 @@ private fun EntryRow(
     timeFmt: DateTimeFormatter,
     now: Long,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val act = activities.firstOrNull { it.id == entry.activity }
     val begin = parseKimaiLocal(entry.begin)
     val end = parseKimaiLocal(entry.end)
     val secs = entrySeconds(entry.begin, entry.end, entry.duration, now)
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
+            // Opaque, so the Delete button behind stays hidden until swiped.
+            .background(MaterialTheme.colorScheme.background)
             .clickable { onClick() }
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -435,6 +545,52 @@ private fun EntryRow(
             )
         }
     }
+}
+
+// ---------------- Delete confirmation ----------------
+
+/**
+ * Third and last step. Names the activity outright so there's no doubt about
+ * which entry is going, and spells out that the server copy goes with it.
+ */
+@Composable
+private fun DeleteConfirmDialog(
+    entry: TimesheetEntry,
+    activities: List<Activity>,
+    deleting: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val name = activities.firstOrNull { it.id == entry.activity }?.name ?: "#${entry.activity}"
+    val whenFmt = remember { DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm") }
+    val begin = parseKimaiLocal(entry.begin)
+    val secs = entrySeconds(entry.begin, entry.end, entry.duration, System.currentTimeMillis())
+
+    AlertDialog(
+        onDismissRequest = { if (!deleting) onDismiss() },
+        title = { Text("Delete “$name”?") },
+        text = {
+            Text(
+                buildString {
+                    append("This deletes the ")
+                    append(formatDuration(secs))
+                    append(" “")
+                    append(name)
+                    append("” entry")
+                    begin?.let { append(" started ${it.format(whenFmt)}") }
+                    append(" from the server. This can't be undone.")
+                },
+            )
+        },
+        confirmButton = {
+            OutlinedButton(enabled = !deleting, onClick = onConfirm) {
+                Text(if (deleting) "Deleting…" else "Delete", color = KimaiRed)
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !deleting, onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 // ---------------- Edit dialog ----------------

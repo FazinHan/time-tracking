@@ -68,6 +68,8 @@ data class SheetState(
     val allTags: List<String> = emptyList(),
     val colorChoices: Map<String, String> = emptyMap(),   // server palette, name → hex
     val editing: TimesheetEntry? = null,
+    val pendingDelete: TimesheetEntry? = null,            // awaiting the confirmation dialog
+    val deleting: Boolean = false,
     // Filters. A null activity/tag/range means "no filter"; tag == UNTAGGED
     // matches entries without tags. from/to are inclusive calendar days.
     val filterActivityId: Int? = null,
@@ -686,6 +688,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openEdit(entry: TimesheetEntry) { _sheet.value = _sheet.value.copy(editing = entry) }
     fun dismissEdit() { _sheet.value = _sheet.value.copy(editing = null) }
+
+    // ---------------- Delete ----------------
+
+    /** Second step of a swipe-to-delete: ask before anything leaves the server. */
+    fun askDelete(entry: TimesheetEntry) {
+        _sheet.value = _sheet.value.copy(pendingDelete = entry, error = null)
+    }
+
+    fun dismissDelete() { _sheet.value = _sheet.value.copy(pendingDelete = null) }
+
+    /** Final step: remove the entry from the server, the list and the cache. */
+    fun deleteEntry(entryId: Int) {
+        val wasRunning = _sheet.value.entries.firstOrNull { it.id == entryId }?.end == null
+        _sheet.value = _sheet.value.copy(deleting = true, error = null)
+        viewModelScope.launch {
+            try {
+                api().deleteTimesheet(entryId)
+                cache.remove(entryId)
+                _sheet.value = _sheet.value.copy(
+                    deleting = false,
+                    pendingDelete = null,
+                    entries = _sheet.value.entries.filterNot { it.id == entryId },
+                )
+                loadSheet()
+                // The timer screen was showing this entry as active; re-read it.
+                if (wasRunning) refresh()
+            } catch (e: Exception) {
+                _sheet.value = _sheet.value.copy(deleting = false, error = friendly(e))
+            }
+        }
+    }
 
     // ---------------- Timesheet filters ----------------
 

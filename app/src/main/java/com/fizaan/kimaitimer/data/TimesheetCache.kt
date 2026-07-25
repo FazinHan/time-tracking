@@ -99,6 +99,13 @@ class TimesheetCache(context: Context) {
         )
     }
 
+    /** Forget a deleted entry, so an offline screen can't resurrect it. */
+    suspend fun remove(entryId: Int) = mutex.withLock {
+        val current = loadLocked()
+        if (current.entries.none { it.id == entryId }) return@withLock
+        writeLocked(current.copy(entries = current.entries.filterNot { it.id == entryId }))
+    }
+
     private suspend fun loadLocked(): CacheSnapshot {
         cached?.let { return it }
         val loaded = withContext(Dispatchers.IO) {

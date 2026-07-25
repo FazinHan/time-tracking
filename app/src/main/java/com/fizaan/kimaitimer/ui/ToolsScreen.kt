@@ -304,6 +304,7 @@ private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
     // Time spent, projected to a full year over the selected span.
     val span = (ChronoUnit.DAYS.between(r.from, r.to) + 1).coerceAtLeast(1).toDouble()
     val yearlySeconds = (r.totalSeconds * 365.25 / span).toLong()
+    val yearShare = yearlySeconds / (365.25 * 24 * 3600) * 100.0
 
     Column(
         modifier = Modifier
@@ -348,22 +349,27 @@ private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
             modifier = Modifier.padding(vertical = 4.dp),
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f),
         )
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Projected yearly time",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    formatDuration(yearlySeconds),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = KimaiGreen,
+                )
+            }
             Text(
-                "Projected yearly time",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                formatDuration(yearlySeconds),
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = KimaiGreen,
+                "${formatPercent(yearShare)} of the year",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                modifier = Modifier.align(Alignment.End).padding(top = 2.dp),
             )
         }
     }
@@ -397,6 +403,14 @@ private fun androidx.compose.foundation.layout.RowScope.BodyCell(
 /** "10" for whole counts, "3.3" otherwise. */
 private fun formatFreq(v: Double): String =
     if (v == v.toLong().toDouble()) v.toLong().toString() else "%.1f".format(v)
+
+/** Keeps small shares legible: "0.04%", "0.9%", "13%". */
+private fun formatPercent(v: Double): String = when {
+    v <= 0.0 -> "0%"
+    v < 0.1 -> "%.2f%%".format(v)
+    v < 10 -> "%.1f%%".format(v)
+    else -> "%.0f%%".format(v)
+}
 
 @Composable
 private fun QuickRange(label: String, onClick: () -> Unit) {

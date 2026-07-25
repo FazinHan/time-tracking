@@ -7,6 +7,7 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.PATCH
 import retrofit2.http.POST
@@ -53,6 +54,10 @@ interface KimaiApi {
 
     @PATCH("api/timesheets/{id}")
     suspend fun updateTimesheet(@Path("id") id: Int, @Body body: TimesheetUpdate): CreatedTimesheet
+
+    /** Removes an entry for good; the server answers 204 with no body. */
+    @DELETE("api/timesheets/{id}")
+    suspend fun deleteTimesheet(@Path("id") id: Int)
 
     @PATCH("api/activities/{id}")
     suspend fun updateActivityColor(@Path("id") id: Int, @Body body: ActivityColorUpdate): Activity
