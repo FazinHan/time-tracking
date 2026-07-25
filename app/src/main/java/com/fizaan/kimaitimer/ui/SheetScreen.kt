@@ -128,6 +128,8 @@ fun SheetScreen(
             }
         }
 
+        CacheBanner(state.cached)
+
         FilterBar(
             state = state,
             onSetActivityFilter = onSetActivityFilter,

@@ -109,6 +109,8 @@ fun CalendarScreen(
             }
         }
 
+        CacheBanner(state.cached)
+
         // Range + paging controls.
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),

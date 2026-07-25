@@ -131,6 +131,8 @@ fun VizScreen(
             }
         }
 
+        CacheBanner(state.cached)
+
         TabRow(
             selectedTabIndex = if (state.tab == VizTab.PIE) 0 else 1,
             containerColor = MaterialTheme.colorScheme.background,

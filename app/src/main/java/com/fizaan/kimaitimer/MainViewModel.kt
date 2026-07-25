@@ -7,10 +7,12 @@ import com.fizaan.kimaitimer.data.Activity
 import com.fizaan.kimaitimer.data.ActivityColorUpdate
 import com.fizaan.kimaitimer.data.ActivityCreate
 import com.fizaan.kimaitimer.data.ApiProvider
+import com.fizaan.kimaitimer.data.CacheSnapshot
 import com.fizaan.kimaitimer.data.Customer
 import com.fizaan.kimaitimer.data.Prefs
 import com.fizaan.kimaitimer.data.Project
 import com.fizaan.kimaitimer.data.TimesheetActive
+import com.fizaan.kimaitimer.data.TimesheetCache
 import com.fizaan.kimaitimer.data.TimesheetCreate
 import com.fizaan.kimaitimer.data.TimesheetEntry
 import com.fizaan.kimaitimer.data.TimesheetUpdate
@@ -35,10 +37,18 @@ enum class SheetPeriod { ALL, DAY, WEEK, MONTH, YEAR, CUSTOM }
 /** Sentinel tag filter meaning "entries with no tags". */
 const val UNTAGGED = ""
 
+/**
+ * Marks a screen as rendering locally saved data instead of a live server
+ * response. [savedAt] is when that data was last downloaded, [reason] why the
+ * server couldn't be reached.
+ */
+data class CacheInfo(val savedAt: Long, val reason: String)
+
 /** Visualisation screen state. Entries are refetched on every open/change. */
 data class VizState(
     val loading: Boolean = false,
     val error: String? = null,
+    val cached: CacheInfo? = null,
     val tab: VizTab = VizTab.PIE,
     val pieMode: PieMode = PieMode.ACTIVITY,
     val period: VizPeriod = VizPeriod.DAY,
@@ -51,6 +61,7 @@ data class VizState(
 data class SheetState(
     val loading: Boolean = false,
     val error: String? = null,
+    val cached: CacheInfo? = null,
     val saving: Boolean = false,
     val entries: List<TimesheetEntry> = emptyList(),
     val activities: List<Activity> = emptyList(),
@@ -74,6 +85,7 @@ data class SheetState(
 data class CalendarState(
     val loading: Boolean = false,
     val error: String? = null,
+    val cached: CacheInfo? = null,
     val anchor: LocalDate = LocalDate.now(),
     val entries: List<TimesheetEntry> = emptyList(),
     val activities: List<Activity> = emptyList(),
@@ -101,7 +113,10 @@ data class FreqResult(
 data class ToolsState(
     val loading: Boolean = false,
     val error: String? = null,
+    val cached: CacheInfo? = null,
     val computing: Boolean = false,
+    val cacheBytes: Long = 0L,
+    val cacheEntries: Int = 0,
     val activities: List<Activity> = emptyList(),
     val freqActivityId: Int? = null,
     val freqFrom: LocalDate = LocalDate.now().minusDays(29),
@@ -148,6 +163,7 @@ data class SetupState(
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = Prefs(app)
+    private val cache = TimesheetCache(app)
     private val beginFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
 
     private val _ui = MutableStateFlow(UiState())
@@ -424,17 +440,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadCalendar() {
         _calendar.value = _calendar.value.copy(loading = true, error = null)
         viewModelScope.launch {
+            val anchor = _calendar.value.anchor
+            val from = anchor.minusDays(7).atStartOfDay()
+            val to = anchor.plusDays(1).atStartOfDay()
             try {
-                val anchor = _calendar.value.anchor
-                val begin = formatKimai(anchor.minusDays(7).atStartOfDay())
-                val end = formatKimai(anchor.plusDays(1).atStartOfDay())
                 val acts = api().activities()
-                val entries = api().timesheets(begin = begin, end = end)
+                val entries = api().timesheets(
+                    begin = formatKimai(from), end = formatKimai(to),
+                )
+                cache.save(from, to, entries, acts)
                 _calendar.value = _calendar.value.copy(
-                    loading = false, entries = entries, activities = acts,
+                    loading = false, entries = entries, activities = acts, cached = null,
                 )
             } catch (e: Exception) {
-                _calendar.value = _calendar.value.copy(loading = false, error = friendly(e))
+                val saved = fallback(e)
+                _calendar.value = if (saved == null) {
+                    _calendar.value.copy(loading = false, error = friendly(e))
+                } else {
+                    _calendar.value.copy(
+                        loading = false,
+                        entries = saved.first.between(from, to),
+                        activities = saved.first.activities,
+                        cached = saved.second,
+                    )
+                }
             }
         }
     }
@@ -459,10 +488,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val acts = api().activities().filter { it.visible }.sortedBy { it.name.lowercase() }
-                _tools.value = _tools.value.copy(loading = false, activities = acts)
+                _tools.value = _tools.value.copy(loading = false, activities = acts, cached = null)
             } catch (e: Exception) {
-                _tools.value = _tools.value.copy(loading = false, error = friendly(e))
+                val saved = fallback(e)
+                _tools.value = if (saved == null) {
+                    _tools.value.copy(loading = false, error = friendly(e))
+                } else {
+                    _tools.value.copy(
+                        loading = false,
+                        activities = saved.first.activities
+                            .filter { it.visible }.sortedBy { it.name.lowercase() },
+                        cached = saved.second,
+                    )
+                }
             }
+            val stats = cache.stats()
+            _tools.value = _tools.value.copy(
+                cacheBytes = stats.bytes, cacheEntries = stats.entries,
+            )
         }
     }
 
@@ -490,29 +533,59 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         _tools.value = s.copy(computing = true, error = null)
         viewModelScope.launch {
+            val begin = from.atStartOfDay()
+            val end = to.plusDays(1).atStartOfDay()
             try {
                 val entries = api().timesheets(
-                    begin = formatKimai(from.atStartOfDay()),
-                    end = formatKimai(to.plusDays(1).atStartOfDay()),
-                ).filter { it.activity == activityId }
-                val now = System.currentTimeMillis()
-                val total = entries.sumOf { entrySeconds(it.begin, it.end, it.duration, now) }
-                val dates = entries.mapNotNull { entryLocalDate(it.begin) }
-                val activeDays = dates.distinct().size
-                val activeWeeks = dates.map { it.with(DayOfWeek.MONDAY) }.distinct().size
-                val activeMonths = dates.map { it.withDayOfMonth(1) }.distinct().size
-                val activeYears = dates.map { it.year }.distinct().size
+                    begin = formatKimai(begin), end = formatKimai(end),
+                )
+                cache.save(begin, end, entries, emptyList())
                 _tools.value = _tools.value.copy(
-                    computing = false,
-                    freqResult = FreqResult(
-                        activityId, from, to, entries.size, total,
-                        activeDays, activeWeeks, activeMonths, activeYears,
-                    ),
+                    computing = false, cached = null,
+                    freqResult = summarise(activityId, from, to, entries),
                 )
             } catch (e: Exception) {
-                _tools.value = _tools.value.copy(computing = false, error = friendly(e))
+                val saved = fallback(e)
+                _tools.value = if (saved == null) {
+                    _tools.value.copy(computing = false, error = friendly(e))
+                } else {
+                    _tools.value.copy(
+                        computing = false, cached = saved.second,
+                        freqResult = summarise(
+                            activityId, from, to, saved.first.between(begin, end),
+                        ),
+                    )
+                }
             }
+            val stats = cache.stats()
+            _tools.value = _tools.value.copy(
+                cacheBytes = stats.bytes, cacheEntries = stats.entries,
+            )
         }
+    }
+
+    /** Roll a window of entries up into the frequency tool's result. */
+    private fun summarise(
+        activityId: Int,
+        from: LocalDate,
+        to: LocalDate,
+        entries: List<TimesheetEntry>,
+    ): FreqResult {
+        val mine = entries.filter { it.activity == activityId }
+        val now = System.currentTimeMillis()
+        val total = mine.sumOf { entrySeconds(it.begin, it.end, it.duration, now) }
+        val dates = mine.mapNotNull { entryLocalDate(it.begin) }
+        return FreqResult(
+            activityId = activityId,
+            from = from,
+            to = to,
+            sessions = mine.size,
+            totalSeconds = total,
+            activeDays = dates.distinct().size,
+            activeWeeks = dates.map { it.with(DayOfWeek.MONDAY) }.distinct().size,
+            activeMonths = dates.map { it.withDayOfMonth(1) }.distinct().size,
+            activeYears = dates.map { it.year }.distinct().size,
+        )
     }
 
     fun clearToolsError() { _tools.value = _tools.value.copy(error = null) }
@@ -536,23 +609,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         VizPeriod.YEAR -> today.withDayOfYear(1)
     }
 
-    /** Fetch everything the viz screen needs, fresh from the server. */
+    /** Fetch everything the viz screen needs, falling back to saved data. */
     fun loadViz() {
         _viz.value = _viz.value.copy(loading = true, error = null)
         viewModelScope.launch {
+            val today = LocalDate.now()
+            val pieBegin = periodStart(_viz.value.period, today).atStartOfDay()
+            val barBegin = today.minusDays(29).atStartOfDay()
+            val end = today.plusDays(1).atStartOfDay()
             try {
-                val today = LocalDate.now()
-                val begin = formatKimai(periodStart(_viz.value.period, today).atStartOfDay())
-                val end = formatKimai(today.plusDays(1).atStartOfDay())
-                val barBegin = formatKimai(today.minusDays(29).atStartOfDay())
                 val acts = api().activities()
-                val pie = api().timesheets(begin = begin, end = end)
-                val bar = api().timesheets(begin = barBegin, end = end)
+                val pie = api().timesheets(
+                    begin = formatKimai(pieBegin), end = formatKimai(end),
+                )
+                val bar = api().timesheets(
+                    begin = formatKimai(barBegin), end = formatKimai(end),
+                )
+                cache.save(pieBegin, end, pie, acts)
+                cache.save(barBegin, end, bar, acts)
                 _viz.value = _viz.value.copy(
-                    loading = false, pieEntries = pie, barEntries = bar, activities = acts,
+                    loading = false, pieEntries = pie, barEntries = bar,
+                    activities = acts, cached = null,
                 )
             } catch (e: Exception) {
-                _viz.value = _viz.value.copy(loading = false, error = friendly(e))
+                val saved = fallback(e)
+                _viz.value = if (saved == null) {
+                    _viz.value.copy(loading = false, error = friendly(e))
+                } else {
+                    _viz.value.copy(
+                        loading = false,
+                        pieEntries = saved.first.between(pieBegin, end),
+                        barEntries = saved.first.between(barBegin, end),
+                        activities = saved.first.activities,
+                        cached = saved.second,
+                    )
+                }
             }
         }
     }
@@ -562,21 +653,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadSheet() {
         _sheet.value = _sheet.value.copy(loading = true, error = null)
         viewModelScope.launch {
+            val today = LocalDate.now()
+            val begin = today.minusDays(365).atStartOfDay()
+            val end = today.plusDays(1).atStartOfDay()
             try {
-                val today = LocalDate.now()
                 val entries = api().timesheets(
-                    begin = formatKimai(today.minusDays(365).atStartOfDay()),
-                    end = formatKimai(today.plusDays(1).atStartOfDay()),
+                    begin = formatKimai(begin), end = formatKimai(end),
                 )
                 val acts = api().activities()
                 val colors = try { api().configColors() } catch (e: Exception) { _sheet.value.colorChoices }
                 val tags = try { api().tags() } catch (e: Exception) { _sheet.value.allTags }
+                cache.save(begin, end, entries, acts)
                 _sheet.value = _sheet.value.copy(
                     loading = false, entries = entries, activities = acts,
-                    colorChoices = colors, allTags = tags,
+                    colorChoices = colors, allTags = tags, cached = null,
                 )
             } catch (e: Exception) {
-                _sheet.value = _sheet.value.copy(loading = false, error = friendly(e))
+                val saved = fallback(e)
+                _sheet.value = if (saved == null) {
+                    _sheet.value.copy(loading = false, error = friendly(e))
+                } else {
+                    _sheet.value.copy(
+                        loading = false,
+                        entries = saved.first.between(begin, end),
+                        activities = saved.first.activities,
+                        cached = saved.second,
+                    )
+                }
             }
         }
     }
@@ -675,6 +778,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearSheetError() { _sheet.value = _sheet.value.copy(error = null) }
     fun clearVizError() { _viz.value = _viz.value.copy(error = null) }
+
+    /**
+     * Locally saved data to render when a fetch fails, paired with the note the
+     * UI shows so the numbers are never mistaken for live ones. Null when
+     * nothing has ever been downloaded — the caller should surface [e] instead.
+     */
+    private suspend fun fallback(e: Exception): Pair<CacheSnapshot, CacheInfo>? {
+        val snap = cache.snapshot()
+        if (snap.lastSync == 0L) return null
+        return snap to CacheInfo(snap.lastSync, friendly(e))
+    }
 
     private fun friendly(e: Exception): String {
         val msg = e.message ?: e.javaClass.simpleName

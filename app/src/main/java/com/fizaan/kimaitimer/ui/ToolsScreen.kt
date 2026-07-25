@@ -46,8 +46,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.fizaan.kimaitimer.CacheInfo
 import com.fizaan.kimaitimer.FreqResult
 import com.fizaan.kimaitimer.ToolsState
+import com.fizaan.kimaitimer.data.CACHE_MAX_BYTES
 import com.fizaan.kimaitimer.util.formatDuration
 import java.time.Instant
 import java.time.LocalDate
@@ -100,9 +102,14 @@ fun ToolsScreen(
             )
         }
 
+        CacheBanner(state.cached)
+
         Box(modifier = Modifier.weight(1f)) {
             when (tool) {
-                Tool.NONE -> ToolList(onOpenFrequency = { tool = Tool.FREQUENCY })
+                Tool.NONE -> ToolList(
+                    state = state,
+                    onOpenFrequency = { tool = Tool.FREQUENCY },
+                )
                 Tool.FREQUENCY -> FrequencyTool(
                     state = state,
                     onSetActivity = onSetFreqActivity,
@@ -134,7 +141,7 @@ fun ToolsScreen(
 }
 
 @Composable
-private fun ToolList(onOpenFrequency: () -> Unit) {
+private fun ToolList(state: ToolsState, onOpenFrequency: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         ToolCard(
             title = "Frequency calculator",
@@ -142,7 +149,24 @@ private fun ToolList(onOpenFrequency: () -> Unit) {
             icon = Icons.Filled.BarChart,
             onClick = onOpenFrequency,
         )
+        Spacer(Modifier.weight(1f))
+        StorageFooter(state)
     }
+}
+
+/**
+ * How much timesheet history is held on the device. The cap is what keeps the
+ * tools usable offline without letting the store grow without bound.
+ */
+@Composable
+private fun StorageFooter(state: ToolsState) {
+    Text(
+        text = "Saved data: ${formatBytes(state.cacheBytes)} of " +
+            "${formatBytes(CACHE_MAX_BYTES)} · ${state.cacheEntries} entries",
+        fontSize = 12.sp,
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+        modifier = Modifier.padding(top = 12.dp),
+    )
 }
 
 @Composable
@@ -251,7 +275,9 @@ private fun FrequencyTool(
         }
 
         Spacer(Modifier.height(20.dp))
-        state.freqResult?.let { r -> if (r.activityId == state.freqActivityId) ResultCard(r) }
+        state.freqResult?.let { r ->
+            if (r.activityId == state.freqActivityId) ResultCard(r, state.cached)
+        }
         Spacer(Modifier.height(24.dp))
     }
 
@@ -264,7 +290,7 @@ private fun FrequencyTool(
 }
 
 @Composable
-private fun ResultCard(r: FreqResult) {
+private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
     if (r.activeDays <= 0) return
     // Each frequency = sessions ÷ number of active periods of that granularity,
     // so empty days/weeks/months/years don't dilute the count. With all data in
@@ -288,6 +314,15 @@ private fun ResultCard(r: FreqResult) {
             )
             .padding(16.dp),
     ) {
+        cached?.let {
+            Text(
+                "Computed from saved data (${formatSavedAt(it.savedAt)}), not the server",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = CacheAmber,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+        }
         Text(
             "Over ${r.activeDays} active day${if (r.activeDays == 1) "" else "s"}: ${r.sessions} session" +
                 "${if (r.sessions == 1) "" else "s"}, ${formatDuration(r.totalSeconds)} total",
