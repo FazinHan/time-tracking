@@ -83,11 +83,14 @@ fun MainScreen(
     onEditTag: (Int) -> Unit,
     onConfirmTag: (List<String>) -> Unit,
     onDismissTagDialog: () -> Unit,
+    onStopEntry: (Int) -> Unit,
+    onDismissStopChoice: () -> Unit,
     onRefresh: () -> Unit,
     onReconfigure: () -> Unit,
     onClearError: () -> Unit,
 ) {
     val running = state.running != null
+    val both = state.running != null && state.second != null
 
     Box(
         modifier = Modifier
@@ -111,8 +114,10 @@ fun MainScreen(
                     fontSize = 18.sp,
                 )
                 if (running) {
+                    val names = listOfNotNull(state.running, state.second)
+                        .joinToString(" + ") { it.activity?.name ?: "activity" }
                     Text(
-                        text = "Tracking: ${state.running?.activity?.name ?: "activity"}",
+                        text = "Tracking: $names",
                         color = KimaiRed,
                         fontSize = 13.sp,
                     )
@@ -149,6 +154,23 @@ fun MainScreen(
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                 fontSize = 16.sp,
             )
+            // A second timer can be layered on top of the first, but no more —
+            // once two are going the offer disappears.
+            if (running && !both) {
+                Spacer(Modifier.height(18.dp))
+                Text(
+                    text = "+ Start another activity",
+                    color = KimaiGreen,
+                    fontSize = 16.sp,
+                    modifier = Modifier
+                        .clickable(enabled = !state.busy) { onStartTap() }
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+            if (both) {
+                Spacer(Modifier.height(26.dp))
+                SecondTimer(item = state.second!!)
+            }
         }
 
         // Error toast-ish banner
@@ -195,6 +217,67 @@ fun MainScreen(
             onDismiss = onDismissTagDialog,
         )
     }
+    if (state.showStopChoice && state.running != null && state.second != null) {
+        StopChoiceDialog(
+            first = state.running,
+            second = state.second,
+            onStop = onStopEntry,
+            onDismiss = onDismissStopChoice,
+        )
+    }
+}
+
+/**
+ * The layered-on second timer: its own name and clock, deliberately smaller
+ * than the primary one so it reads as secondary.
+ */
+@Composable
+private fun SecondTimer(item: TimesheetActive) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            text = "Also running",
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+            fontSize = 12.sp,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = item.activity?.name ?: "activity",
+            color = MaterialTheme.colorScheme.onBackground,
+            fontSize = 16.sp,
+        )
+        ElapsedTimer(beginIso = item.begin, color = KimaiRed, fontSize = 26.sp)
+    }
+}
+
+/** With two timers going, stopping has to say which one. */
+@Composable
+private fun StopChoiceDialog(
+    first: TimesheetActive,
+    second: TimesheetActive,
+    onStop: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Stop which activity?") },
+        text = {
+            Column {
+                listOf(first, second).forEach { item ->
+                    Text(
+                        text = item.activity?.name ?: "activity",
+                        fontSize = 18.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onStop(item.id) }
+                            .padding(vertical = 14.dp),
+                    )
+                    Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -259,7 +342,11 @@ private fun BigButton(running: Boolean, busy: Boolean, onClick: () -> Unit) {
 
 /** Live-ticking elapsed time (HH:MM:SS) since the running timesheet began. */
 @Composable
-private fun ElapsedTimer(beginIso: String?, color: Color) {
+private fun ElapsedTimer(
+    beginIso: String?,
+    color: Color,
+    fontSize: androidx.compose.ui.unit.TextUnit = 40.sp,
+) {
     val beginMs = remember(beginIso) { parseBeginMillis(beginIso) }
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(beginIso) {
@@ -272,7 +359,7 @@ private fun ElapsedTimer(beginIso: String?, color: Color) {
     Text(
         text = text,
         color = color,
-        fontSize = 40.sp,
+        fontSize = fontSize,
         fontWeight = FontWeight.SemiBold,
         fontFamily = FontFamily.Monospace,
     )

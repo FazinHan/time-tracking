@@ -19,6 +19,8 @@ import com.fizaan.kimaitimer.data.TimesheetUpdate
 import com.fizaan.kimaitimer.util.entryLocalDate
 import com.fizaan.kimaitimer.util.entrySeconds
 import com.fizaan.kimaitimer.util.formatKimai
+import com.fizaan.kimaitimer.util.parseKimaiLocal
+import com.fizaan.kimaitimer.util.parseKimaiMillis
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -111,6 +113,35 @@ data class FreqResult(
     val activeYears: Int,
 )
 
+/** What a batch operation will do to every matched entry. */
+enum class BatchAction { MOVE_ACTIVITY, SET_TAGS, SET_COLOR, DELETE }
+
+/**
+ * Batch edit tool. The filters narrow the timesheet down to a set of entries —
+ * any subset of them may be left unset — and an action is then applied to every
+ * entry that matched.
+ */
+data class BatchState(
+    val filterActivityId: Int? = null,
+    val filterTag: String? = null,
+    val minMinutes: String = "",          // inclusive lower bound, blank = none
+    val maxMinutes: String = "",          // inclusive upper bound, blank = none
+    val from: LocalDate = LocalDate.now().minusDays(29),
+    val to: LocalDate = LocalDate.now(),
+    val searching: Boolean = false,
+    val searched: Boolean = false,
+    val matches: List<TimesheetEntry> = emptyList(),
+    // Pending action awaiting confirmation, plus what it was told to apply.
+    val pending: BatchAction? = null,
+    val pendingActivityId: Int? = null,
+    val pendingTags: List<String> = emptyList(),
+    val pendingColor: String? = null,
+    val confirmedOnce: Boolean = false,   // delete needs a second confirmation
+    val applying: Boolean = false,
+    val progress: String? = null,
+    val done: String? = null,
+)
+
 /** Tools screen state. Currently hosts the frequency calculator. */
 data class ToolsState(
     val loading: Boolean = false,
@@ -124,6 +155,9 @@ data class ToolsState(
     val freqFrom: LocalDate = LocalDate.now().minusDays(29),
     val freqTo: LocalDate = LocalDate.now(),
     val freqResult: FreqResult? = null,
+    val allTags: List<String> = emptyList(),
+    val colorChoices: Map<String, String> = emptyMap(),
+    val batch: BatchState = BatchState(),
 )
 
 /** Whole-app UI state. */
@@ -133,7 +167,11 @@ data class UiState(
     val loading: Boolean = false,
     val busy: Boolean = false,          // an action (start/stop/create) is in flight
     val error: String? = null,
+    // Up to two timers can run at once: [running] is the one started first and
+    // owns the big clock, [second] is the later one.
     val running: TimesheetActive? = null,
+    val second: TimesheetActive? = null,
+    val showStopChoice: Boolean = false,
     val activities: List<Activity> = emptyList(),
     val recent: List<TimesheetActive> = emptyList(),
     val allTags: List<String> = emptyList(),
@@ -166,6 +204,7 @@ data class SetupState(
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = Prefs(app)
     private val cache = TimesheetCache(app)
+    private val notifier = RunningNotifier(app)
     private val beginFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
 
     private val _ui = MutableStateFlow(UiState())
@@ -275,16 +314,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value = _ui.value.copy(loading = true, error = null)
         viewModelScope.launch {
             try {
-                val active = api().active().firstOrNull()
+                // Oldest first, so the timer that started earlier keeps the big clock.
+                val actives = api().active().sortedBy { parseKimaiMillis(it.begin) ?: 0L }
                 val acts = api().activities().filter { it.visible }.sortedBy { it.name.lowercase() }
                 // "recent" is a nice-to-have; don't let it break the main screen.
                 val recent = try { api().recent(8) } catch (e: Exception) { _ui.value.recent }
                 // Tags are used to build the picker; best-effort like recent.
                 val tags = try { api().tags() } catch (e: Exception) { _ui.value.allTags }
                 _ui.value = _ui.value.copy(
-                    loading = false, running = active, activities = acts,
+                    loading = false,
+                    running = actives.getOrNull(0),
+                    second = actives.getOrNull(1),
+                    activities = acts,
                     recent = recent, allTags = tags,
                 )
+                syncNotification()
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(loading = false, error = friendly(e))
             }
@@ -387,18 +431,53 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(busy = false)
                 refresh()
             } catch (e: Exception) {
-                _ui.value = _ui.value.copy(busy = false, error = friendly(e))
+                // A rejected *second* start is almost always Kimai's own limit on
+                // concurrent entries, which the error body doesn't reach us.
+                val message = if (_ui.value.running != null && e.message?.contains("400") == true) {
+                    "Kimai refused a second timer. Raise its active-entry hard " +
+                        "limit to 2 to track two activities at once."
+                } else {
+                    friendly(e)
+                }
+                _ui.value = _ui.value.copy(busy = false, error = message)
             }
         }
     }
 
+    /** Mirror the running timers onto the lock screen (or clear it when idle). */
+    private fun syncNotification() = notifier.sync(_ui.value.running, _ui.value.second)
+
+    /**
+     * The stop button. With one timer running it stops it outright; with two,
+     * it can't guess which one you meant, so it asks first.
+     */
     fun stop() {
-        val id = _ui.value.running?.id ?: return
-        _ui.value = _ui.value.copy(busy = true, error = null)
+        val s = _ui.value
+        if (s.running == null) return
+        if (s.second != null) {
+            _ui.value = s.copy(showStopChoice = true, error = null)
+            return
+        }
+        stopEntry(s.running.id)
+    }
+
+    fun dismissStopChoice() { _ui.value = _ui.value.copy(showStopChoice = false) }
+
+    /** Stop one specific running entry, whichever of the two it is. */
+    fun stopEntry(id: Int) {
+        _ui.value = _ui.value.copy(busy = true, error = null, showStopChoice = false)
         viewModelScope.launch {
             try {
                 api().stop(id)
-                _ui.value = _ui.value.copy(busy = false, running = null)
+                val s = _ui.value
+                // Promote the survivor so the UI settles before the refresh lands.
+                val remaining = listOfNotNull(s.running, s.second).filter { it.id != id }
+                _ui.value = s.copy(
+                    busy = false,
+                    running = remaining.getOrNull(0),
+                    second = remaining.getOrNull(1),
+                )
+                syncNotification()
                 refresh()
             } catch (e: Exception) {
                 _ui.value = _ui.value.copy(busy = false, error = friendly(e))
@@ -490,7 +569,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val acts = api().activities().filter { it.visible }.sortedBy { it.name.lowercase() }
-                _tools.value = _tools.value.copy(loading = false, activities = acts, cached = null)
+                // Both are only needed by the batch tool; don't fail the screen for them.
+                val tags = try { api().tags() } catch (e: Exception) { _tools.value.allTags }
+                val colors = try { api().configColors() } catch (e: Exception) { _tools.value.colorChoices }
+                _tools.value = _tools.value.copy(
+                    loading = false, activities = acts, allTags = tags,
+                    colorChoices = colors, cached = null,
+                )
             } catch (e: Exception) {
                 val saved = fallback(e)
                 _tools.value = if (saved == null) {
@@ -591,6 +676,189 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearToolsError() { _tools.value = _tools.value.copy(error = null) }
+
+    // ---------------- Batch edit ----------------
+
+    private fun updateBatch(block: (BatchState) -> BatchState) {
+        _tools.value = _tools.value.copy(batch = block(_tools.value.batch))
+    }
+
+    /** Any filter change invalidates the previous match set. */
+    private fun refilter(block: (BatchState) -> BatchState) = updateBatch {
+        block(it).copy(searched = false, matches = emptyList(), done = null)
+    }
+
+    fun setBatchActivity(id: Int?) = refilter { it.copy(filterActivityId = id) }
+    fun setBatchTag(tag: String?) = refilter { it.copy(filterTag = tag) }
+    fun setBatchMin(v: String) = refilter { it.copy(minMinutes = v.filter(Char::isDigit)) }
+    fun setBatchMax(v: String) = refilter { it.copy(maxMinutes = v.filter(Char::isDigit)) }
+    fun setBatchFrom(d: LocalDate) = refilter { it.copy(from = d) }
+    fun setBatchTo(d: LocalDate) = refilter { it.copy(to = d) }
+
+    /** Pull the window from the server and keep the entries the filters allow. */
+    fun runBatchSearch() {
+        val b = _tools.value.batch
+        if (b.to.isBefore(b.from)) {
+            _tools.value = _tools.value.copy(error = "End date is before the start date.")
+            return
+        }
+        updateBatch { it.copy(searching = true, done = null) }
+        _tools.value = _tools.value.copy(error = null)
+        viewModelScope.launch {
+            val begin = b.from.atStartOfDay()
+            val end = b.to.plusDays(1).atStartOfDay()
+            try {
+                val entries = api().timesheets(
+                    begin = formatKimai(begin), end = formatKimai(end),
+                )
+                cache.save(begin, end, entries, emptyList())
+                _tools.value = _tools.value.copy(cached = null)
+                updateBatch {
+                    it.copy(
+                        searching = false, searched = true,
+                        matches = entries.filter { e -> batchMatches(e, b) },
+                    )
+                }
+            } catch (e: Exception) {
+                val saved = fallback(e)
+                if (saved == null) {
+                    _tools.value = _tools.value.copy(error = friendly(e))
+                    updateBatch { it.copy(searching = false) }
+                } else {
+                    _tools.value = _tools.value.copy(cached = saved.second)
+                    updateBatch {
+                        it.copy(
+                            searching = false, searched = true,
+                            matches = saved.first.between(begin, end)
+                                .filter { e -> batchMatches(e, b) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun batchMatches(e: TimesheetEntry, b: BatchState): Boolean {
+        if (b.filterActivityId != null && e.activity != b.filterActivityId) return false
+        b.filterTag?.let { wanted ->
+            val tags = e.tags?.filter { it.isNotBlank() }.orEmpty()
+            val ok = if (wanted == UNTAGGED) tags.isEmpty() else tags.contains(wanted)
+            if (!ok) return false
+        }
+        val minutes = entrySeconds(e.begin, e.end, e.duration, System.currentTimeMillis()) / 60
+        b.minMinutes.toLongOrNull()?.let { if (minutes < it) return false }
+        b.maxMinutes.toLongOrNull()?.let { if (minutes > it) return false }
+        return true
+    }
+
+    /** Arm an action; nothing is sent until it's confirmed. */
+    fun askBatch(
+        action: BatchAction,
+        activityId: Int? = null,
+        tags: List<String> = emptyList(),
+        color: String? = null,
+    ) = updateBatch {
+        it.copy(
+            pending = action, pendingActivityId = activityId,
+            pendingTags = tags, pendingColor = color, confirmedOnce = false,
+        )
+    }
+
+    fun dismissBatch() = updateBatch { it.copy(pending = null, confirmedOnce = false) }
+
+    /** Deleting is the one action that has to be confirmed twice. */
+    fun confirmBatch() {
+        val b = _tools.value.batch
+        if (b.pending == BatchAction.DELETE && !b.confirmedOnce) {
+            updateBatch { it.copy(confirmedOnce = true) }
+            return
+        }
+        applyBatch()
+    }
+
+    private fun applyBatch() {
+        val b = _tools.value.batch
+        val action = b.pending ?: return
+        val targets = b.matches
+        if (targets.isEmpty()) {
+            dismissBatch()
+            return
+        }
+        updateBatch {
+            it.copy(pending = null, confirmedOnce = false, applying = true, progress = "0 of ${targets.size}")
+        }
+        _tools.value = _tools.value.copy(error = null)
+        viewModelScope.launch {
+            try {
+                val summary = when (action) {
+                    // Colour belongs to the activity, so it's applied once per
+                    // distinct activity rather than once per entry.
+                    BatchAction.SET_COLOR -> {
+                        val color = b.pendingColor ?: return@launch dismissBatch()
+                        val ids = targets.map { it.activity }.distinct()
+                        ids.forEachIndexed { i, id ->
+                            updateBatch { it.copy(progress = "${i + 1} of ${ids.size} activities") }
+                            api().updateActivityColor(id, ActivityColorUpdate(color = color))
+                        }
+                        "Recoloured ${ids.size} ${plural(ids.size, "activity", "activities")}."
+                    }
+                    else -> {
+                        targets.forEachIndexed { i, e ->
+                            updateBatch { it.copy(progress = "${i + 1} of ${targets.size}") }
+                            when (action) {
+                                BatchAction.DELETE -> {
+                                    api().deleteTimesheet(e.id)
+                                    cache.remove(e.id)
+                                }
+                                BatchAction.MOVE_ACTIVITY -> api().updateTimesheet(
+                                    e.id, patchFor(e, activity = b.pendingActivityId),
+                                )
+                                BatchAction.SET_TAGS -> api().updateTimesheet(
+                                    e.id, patchFor(e, tags = b.pendingTags.joinToString(",")),
+                                )
+                                BatchAction.SET_COLOR -> Unit   // handled above
+                            }
+                        }
+                        val n = targets.size
+                        val what = plural(n, "entry", "entries")
+                        when (action) {
+                            BatchAction.DELETE -> "Deleted $n $what."
+                            BatchAction.MOVE_ACTIVITY -> "Moved $n $what."
+                            else -> "Retagged $n $what."
+                        }
+                    }
+                }
+                // The match set is stale now; make the user search again rather
+                // than showing entries that no longer look like that.
+                updateBatch {
+                    it.copy(
+                        applying = false, progress = null, done = summary,
+                        matches = emptyList(), searched = false,
+                    )
+                }
+            } catch (e: Exception) {
+                _tools.value = _tools.value.copy(error = friendly(e))
+                updateBatch { it.copy(applying = false, progress = null) }
+            }
+        }
+    }
+
+    /**
+     * A PATCH body carrying the entry's own begin/end so a partial update can't
+     * disturb them; everything left null is untouched by Kimai.
+     */
+    private fun patchFor(
+        e: TimesheetEntry,
+        activity: Int? = null,
+        tags: String? = null,
+    ): TimesheetUpdate = TimesheetUpdate(
+        begin = parseKimaiLocal(e.begin)?.let(::formatKimai) ?: e.begin,
+        end = e.end?.let { iso -> parseKimaiLocal(iso)?.let(::formatKimai) ?: iso },
+        activity = activity,
+        tags = tags,
+    )
+
+    private fun plural(n: Int, one: String, many: String) = if (n == 1) one else many
 
     // ---------------- Visualisations ----------------
 

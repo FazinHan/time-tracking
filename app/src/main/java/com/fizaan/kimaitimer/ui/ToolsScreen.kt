@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
@@ -46,6 +47,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.fizaan.kimaitimer.BatchAction
 import com.fizaan.kimaitimer.CacheInfo
 import com.fizaan.kimaitimer.FreqResult
 import com.fizaan.kimaitimer.ToolsState
@@ -58,7 +60,7 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
 /** Which tool is currently open within the Tools section. */
-private enum class Tool { NONE, FREQUENCY }
+private enum class Tool { NONE, FREQUENCY, BATCH }
 
 @Composable
 fun ToolsScreen(
@@ -68,6 +70,16 @@ fun ToolsScreen(
     onSetFreqFrom: (LocalDate) -> Unit,
     onSetFreqTo: (LocalDate) -> Unit,
     onCompute: () -> Unit,
+    onSetBatchActivity: (Int?) -> Unit,
+    onSetBatchTag: (String?) -> Unit,
+    onSetBatchMin: (String) -> Unit,
+    onSetBatchMax: (String) -> Unit,
+    onSetBatchFrom: (LocalDate) -> Unit,
+    onSetBatchTo: (LocalDate) -> Unit,
+    onBatchSearch: () -> Unit,
+    onAskBatch: (BatchAction, Int?, List<String>, String?) -> Unit,
+    onConfirmBatch: () -> Unit,
+    onDismissBatch: () -> Unit,
     onClearError: () -> Unit,
 ) {
     var tool by remember { mutableStateOf(Tool.NONE) }
@@ -95,7 +107,11 @@ fun ToolsScreen(
                 }
             }
             Text(
-                text = if (tool == Tool.FREQUENCY) "Frequency calculator" else "Tools",
+                text = when (tool) {
+                    Tool.FREQUENCY -> "Frequency calculator"
+                    Tool.BATCH -> "Batch edit"
+                    Tool.NONE -> "Tools"
+                },
                 color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 18.sp,
                 modifier = Modifier.weight(1f),
@@ -109,6 +125,7 @@ fun ToolsScreen(
                 Tool.NONE -> ToolList(
                     state = state,
                     onOpenFrequency = { tool = Tool.FREQUENCY },
+                    onOpenBatch = { tool = Tool.BATCH },
                 )
                 Tool.FREQUENCY -> FrequencyTool(
                     state = state,
@@ -116,6 +133,19 @@ fun ToolsScreen(
                     onSetFrom = onSetFreqFrom,
                     onSetTo = onSetFreqTo,
                     onCompute = onCompute,
+                )
+                Tool.BATCH -> BatchTool(
+                    state = state,
+                    onSetActivity = onSetBatchActivity,
+                    onSetTag = onSetBatchTag,
+                    onSetMin = onSetBatchMin,
+                    onSetMax = onSetBatchMax,
+                    onSetFrom = onSetBatchFrom,
+                    onSetTo = onSetBatchTo,
+                    onSearch = onBatchSearch,
+                    onAsk = onAskBatch,
+                    onConfirm = onConfirmBatch,
+                    onDismiss = onDismissBatch,
                 )
             }
             if (state.loading || state.computing) {
@@ -141,13 +171,24 @@ fun ToolsScreen(
 }
 
 @Composable
-private fun ToolList(state: ToolsState, onOpenFrequency: () -> Unit) {
+private fun ToolList(
+    state: ToolsState,
+    onOpenFrequency: () -> Unit,
+    onOpenBatch: () -> Unit,
+) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         ToolCard(
             title = "Frequency calculator",
             subtitle = "Average how often and how long you do an activity",
             icon = Icons.Filled.BarChart,
             onClick = onOpenFrequency,
+        )
+        Spacer(Modifier.height(12.dp))
+        ToolCard(
+            title = "Batch edit",
+            subtitle = "Retag, recolour, move or delete many entries at once",
+            icon = Icons.Filled.EditNote,
+            onClick = onOpenBatch,
         )
         Spacer(Modifier.weight(1f))
         StorageFooter(state)
@@ -282,10 +323,10 @@ private fun FrequencyTool(
     }
 
     if (pickFrom) {
-        FreqDateDialog(initial = state.freqFrom, onDismiss = { pickFrom = false }) { onSetFrom(it) }
+        ToolDateDialog(initial = state.freqFrom, onDismiss = { pickFrom = false }) { onSetFrom(it) }
     }
     if (pickTo) {
-        FreqDateDialog(initial = state.freqTo, onDismiss = { pickTo = false }) { onSetTo(it) }
+        ToolDateDialog(initial = state.freqTo, onDismiss = { pickTo = false }) { onSetTo(it) }
     }
 }
 
@@ -427,9 +468,10 @@ private fun SectionLabel(text: String) {
     )
 }
 
+/** Shared by the tools that need a single date — frequency and batch edit. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun FreqDateDialog(
+fun ToolDateDialog(
     initial: LocalDate,
     onDismiss: () -> Unit,
     onPick: (LocalDate) -> Unit,

@@ -1,9 +1,14 @@
 package com.fizaan.kimaitimer
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
@@ -37,9 +42,22 @@ import kotlinx.coroutines.launch
 private data class Dest(val screen: AppScreen, val label: String, val icon: ImageVector)
 
 class MainActivity : ComponentActivity() {
+    private val askNotifications =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    /** The running-timer notification is the lock-screen view; ask once for it. */
+    private fun ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        ensureNotificationPermission()
         setContent {
             KimaiTimerTheme {
                 val vm: MainViewModel = viewModel()
@@ -111,6 +129,8 @@ class MainActivity : ComponentActivity() {
                                 onEditTag = vm::editTag,
                                 onConfirmTag = vm::confirmTag,
                                 onDismissTagDialog = vm::dismissTagDialog,
+                                onStopEntry = vm::stopEntry,
+                                onDismissStopChoice = vm::dismissStopChoice,
                                 onRefresh = vm::refresh,
                                 onReconfigure = vm::reconfigure,
                                 onClearError = vm::clearError,
@@ -157,6 +177,16 @@ class MainActivity : ComponentActivity() {
                                 onSetFreqFrom = vm::setFreqFrom,
                                 onSetFreqTo = vm::setFreqTo,
                                 onCompute = vm::computeFrequency,
+                                onSetBatchActivity = vm::setBatchActivity,
+                                onSetBatchTag = vm::setBatchTag,
+                                onSetBatchMin = vm::setBatchMin,
+                                onSetBatchMax = vm::setBatchMax,
+                                onSetBatchFrom = vm::setBatchFrom,
+                                onSetBatchTo = vm::setBatchTo,
+                                onBatchSearch = vm::runBatchSearch,
+                                onAskBatch = vm::askBatch,
+                                onConfirmBatch = vm::confirmBatch,
+                                onDismissBatch = vm::dismissBatch,
                                 onClearError = vm::clearToolsError,
                             )
                         }

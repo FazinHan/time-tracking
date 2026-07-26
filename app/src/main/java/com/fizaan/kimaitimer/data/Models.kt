@@ -88,12 +88,16 @@ data class ActivityCreate(
     val visible: Boolean = true,
 )
 
-/** Moshi omits nulls, so a null end leaves the server value untouched. */
+/**
+ * Moshi omits nulls and Kimai submits PATCH bodies without clearing missing
+ * fields, so anything left null here keeps its server value.
+ */
 data class TimesheetUpdate(
     val begin: String,
     val end: String? = null,
     val description: String? = null,
     val tags: String? = null,
+    val activity: Int? = null,
 )
 
 data class ActivityColorUpdate(
