@@ -103,3 +103,7 @@ data class TimesheetUpdate(
 data class ActivityColorUpdate(
     val color: String,
 )
+
+data class ActivityNameUpdate(
+    val name: String,
+)

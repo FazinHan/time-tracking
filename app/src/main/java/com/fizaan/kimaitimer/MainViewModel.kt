@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.fizaan.kimaitimer.data.Activity
 import com.fizaan.kimaitimer.data.ActivityColorUpdate
 import com.fizaan.kimaitimer.data.ActivityCreate
+import com.fizaan.kimaitimer.data.ActivityNameUpdate
 import com.fizaan.kimaitimer.data.ApiProvider
 import com.fizaan.kimaitimer.data.CacheSnapshot
 import com.fizaan.kimaitimer.data.Customer
@@ -113,8 +114,12 @@ data class FreqResult(
     val activeYears: Int,
 )
 
-/** What a batch operation will do to every matched entry. */
-enum class BatchAction { MOVE_ACTIVITY, SET_TAGS, SET_COLOR, DELETE }
+/**
+ * What a batch operation will do. [RENAME_ACTIVITY] and [MOVE_ACTIVITY] are the
+ * two outcomes of typing an activity name: an unused name renames the activity
+ * the entries belong to, an existing one can only absorb them.
+ */
+enum class BatchAction { RENAME_ACTIVITY, MOVE_ACTIVITY, SET_TAGS, SET_COLOR, DELETE }
 
 /**
  * Batch edit tool. The filters narrow the timesheet down to a set of entries —
@@ -134,6 +139,7 @@ data class BatchState(
     // Pending action awaiting confirmation, plus what it was told to apply.
     val pending: BatchAction? = null,
     val pendingActivityId: Int? = null,
+    val pendingActivityName: String = "",
     val pendingTags: List<String> = emptyList(),
     val pendingColor: String? = null,
     val confirmedOnce: Boolean = false,   // delete needs a second confirmation
@@ -757,11 +763,49 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         activityId: Int? = null,
         tags: List<String> = emptyList(),
         color: String? = null,
+        activityName: String = "",
     ) = updateBatch {
         it.copy(
             pending = action, pendingActivityId = activityId,
+            pendingActivityName = activityName,
             pendingTags = tags, pendingColor = color, confirmedOnce = false,
         )
+    }
+
+    /**
+     * The activity is changed by typing a name, not by picking one.
+     *
+     * A name nothing else uses renames the activity the matched entries belong
+     * to — which needs them to belong to exactly one. A name that is already
+     * taken cannot be created twice, so the only sensible reading is "put these
+     * entries under that activity", and the user is asked before that happens.
+     */
+    fun askBatchActivityName(raw: String) {
+        val name = raw.trim()
+        if (name.isEmpty()) return
+        val distinct = _tools.value.batch.matches.map { it.activity }.distinct()
+        if (distinct.isEmpty()) return
+        val existing = _tools.value.activities
+            .firstOrNull { it.name.equals(name, ignoreCase = true) }
+
+        if (existing == null) {
+            if (distinct.size != 1) {
+                _tools.value = _tools.value.copy(
+                    error = "These entries span ${distinct.size} activities, so there's " +
+                        "no single one to rename. Filter to one activity first.",
+                )
+                return
+            }
+            askBatch(BatchAction.RENAME_ACTIVITY, activityId = distinct.first(), activityName = name)
+            return
+        }
+        if (distinct.size == 1 && distinct.first() == existing.id) {
+            _tools.value = _tools.value.copy(
+                error = "These entries are already under “${existing.name}”.",
+            )
+            return
+        }
+        askBatch(BatchAction.MOVE_ACTIVITY, activityId = existing.id, activityName = existing.name)
     }
 
     fun dismissBatch() = updateBatch { it.copy(pending = null, confirmedOnce = false) }
@@ -791,6 +835,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val summary = when (action) {
+                    // Renaming touches one row: the activity itself.
+                    BatchAction.RENAME_ACTIVITY -> {
+                        val id = b.pendingActivityId ?: return@launch dismissBatch()
+                        api().updateActivityName(id, ActivityNameUpdate(name = b.pendingActivityName))
+                        // The stored list still holds the old name.
+                        _tools.value = _tools.value.copy(
+                            activities = api().activities()
+                                .filter { it.visible }.sortedBy { it.name.lowercase() },
+                        )
+                        "Renamed the activity to “${b.pendingActivityName}”."
+                    }
                     // Colour belongs to the activity, so it's applied once per
                     // distinct activity rather than once per entry.
                     BatchAction.SET_COLOR -> {
@@ -816,14 +871,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                                 BatchAction.SET_TAGS -> api().updateTimesheet(
                                     e.id, patchFor(e, tags = b.pendingTags.joinToString(",")),
                                 )
-                                BatchAction.SET_COLOR -> Unit   // handled above
+                                BatchAction.SET_COLOR,
+                                BatchAction.RENAME_ACTIVITY -> Unit   // handled above
                             }
                         }
                         val n = targets.size
                         val what = plural(n, "entry", "entries")
                         when (action) {
                             BatchAction.DELETE -> "Deleted $n $what."
-                            BatchAction.MOVE_ACTIVITY -> "Moved $n $what."
+                            BatchAction.MOVE_ACTIVITY ->
+                                "Moved $n $what to “${b.pendingActivityName}”."
                             else -> "Retagged $n $what."
                         }
                     }

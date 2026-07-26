@@ -62,6 +62,10 @@ interface KimaiApi {
     @PATCH("api/activities/{id}")
     suspend fun updateActivityColor(@Path("id") id: Int, @Body body: ActivityColorUpdate): Activity
 
+    /** Renames the activity itself — every entry using it follows. */
+    @PATCH("api/activities/{id}")
+    suspend fun updateActivityName(@Path("id") id: Int, @Body body: ActivityNameUpdate): Activity
+
     /** The server's configured color palette (name → hex). PATCHed colors must come from it. */
     @GET("api/config/colors")
     suspend fun configColors(): Map<String, String>

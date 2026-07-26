@@ -70,6 +70,7 @@ fun BatchTool(
     onSetTo: (LocalDate) -> Unit,
     onSearch: () -> Unit,
     onAsk: (BatchAction, Int?, List<String>, String?) -> Unit,
+    onAskActivityName: (String) -> Unit,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -158,7 +159,11 @@ fun BatchTool(
             MatchSummary(state)
             if (b.matches.isNotEmpty()) {
                 Spacer(Modifier.height(20.dp))
-                ActionPanel(state = state, onAsk = onAsk)
+                ActionPanel(
+                    state = state,
+                    onAsk = onAsk,
+                    onAskActivityName = onAskActivityName,
+                )
             }
         }
         Spacer(Modifier.height(32.dp))
@@ -249,36 +254,45 @@ private fun MatchSummary(state: ToolsState) {
 private fun ActionPanel(
     state: ToolsState,
     onAsk: (BatchAction, Int?, List<String>, String?) -> Unit,
+    onAskActivityName: (String) -> Unit,
 ) {
     val b = state.batch
-    var moveMenu by remember { mutableStateOf(false) }
     val tags = remember(b.matches) { mutableStateListOf<String>() }
     val busy = b.applying
 
+    // Prefilled with the activity these entries already use, so changing it is
+    // literally editing the name.
+    val currentName = remember(b.matches, state.activities) {
+        val ids = b.matches.map { it.activity }.distinct()
+        if (ids.size == 1) state.activities.firstOrNull { it.id == ids.first() }?.name ?: ""
+        else ""
+    }
+    var newName by remember(currentName) { mutableStateOf(currentName) }
+
     BatchSectionLabel("Apply to all ${b.matches.size}")
 
-    // Move the matched entries onto a different activity.
-    Box {
-        OutlinedButton(
-            onClick = { moveMenu = true },
-            enabled = !busy,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Change activity…", modifier = Modifier.weight(1f))
-            Icon(Icons.Filled.ArrowDropDown, null)
-        }
-        DropdownMenu(expanded = moveMenu, onDismissRequest = { moveMenu = false }) {
-            state.activities.forEach { a ->
-                DropdownMenuItem(
-                    text = { Text(a.name) },
-                    onClick = {
-                        moveMenu = false
-                        onAsk(BatchAction.MOVE_ACTIVITY, a.id, emptyList(), null)
-                    },
-                )
-            }
-        }
+    OutlinedTextField(
+        value = newName,
+        onValueChange = { newName = it },
+        label = { Text("Activity name") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(8.dp))
+    OutlinedButton(
+        onClick = { onAskActivityName(newName) },
+        enabled = !busy && newName.isNotBlank() && newName.trim() != currentName,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text("Change activity")
     }
+    Text(
+        "A new name renames the activity itself. A name that already exists can " +
+            "only take these entries in — you'll be asked first.",
+        fontSize = 11.sp,
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+        modifier = Modifier.padding(top = 6.dp),
+    )
 
     Spacer(Modifier.height(16.dp))
     BatchSectionLabel("Set tags to")
@@ -368,10 +382,16 @@ private fun ConfirmDialog(
     val title: String
     val body: String
     when (action) {
+        BatchAction.RENAME_ACTIVITY -> {
+            title = "Rename “${targetName ?: "?"}”?"
+            body = "The activity itself is renamed to “${b.pendingActivityName}”, so " +
+                "every entry under it takes the new name — including any outside " +
+                "these $what."
+        }
         BatchAction.MOVE_ACTIVITY -> {
-            title = "Move $what?"
-            body = "All $what will be filed under “${targetName ?: "?"}”. " +
-                "Their times, descriptions and tags stay as they are."
+            title = "“${b.pendingActivityName}” already exists"
+            body = "An activity by that name is already on the server, so nothing can " +
+                "be renamed to it. Add these $what to “${b.pendingActivityName}” instead?"
         }
         BatchAction.SET_TAGS -> {
             title = if (b.pendingTags.isEmpty()) "Clear tags on $what?" else "Retag $what?"
@@ -409,6 +429,8 @@ private fun ConfirmDialog(
                     when {
                         action == BatchAction.DELETE && second -> "Delete permanently"
                         action == BatchAction.DELETE -> "Continue"
+                        action == BatchAction.MOVE_ACTIVITY -> "Yes, add them"
+                        action == BatchAction.RENAME_ACTIVITY -> "Rename"
                         else -> "Apply"
                     },
                     color = if (action == BatchAction.DELETE) KimaiRed
@@ -416,7 +438,11 @@ private fun ConfirmDialog(
                 )
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(if (action == BatchAction.MOVE_ACTIVITY) "No" else "Cancel")
+            }
+        },
     )
 }
 

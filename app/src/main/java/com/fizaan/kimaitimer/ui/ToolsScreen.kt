@@ -78,6 +78,7 @@ fun ToolsScreen(
     onSetBatchTo: (LocalDate) -> Unit,
     onBatchSearch: () -> Unit,
     onAskBatch: (BatchAction, Int?, List<String>, String?) -> Unit,
+    onAskBatchActivityName: (String) -> Unit,
     onConfirmBatch: () -> Unit,
     onDismissBatch: () -> Unit,
     onClearError: () -> Unit,
@@ -144,6 +145,7 @@ fun ToolsScreen(
                     onSetTo = onSetBatchTo,
                     onSearch = onBatchSearch,
                     onAsk = onAskBatch,
+                    onAskActivityName = onAskBatchActivityName,
                     onConfirm = onConfirmBatch,
                     onDismiss = onDismissBatch,
                 )

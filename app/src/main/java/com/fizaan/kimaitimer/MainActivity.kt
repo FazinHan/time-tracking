@@ -185,6 +185,7 @@ class MainActivity : ComponentActivity() {
                                 onSetBatchTo = vm::setBatchTo,
                                 onBatchSearch = vm::runBatchSearch,
                                 onAskBatch = vm::askBatch,
+                                onAskBatchActivityName = vm::askBatchActivityName,
                                 onConfirmBatch = vm::confirmBatch,
                                 onDismissBatch = vm::dismissBatch,
                                 onClearError = vm::clearToolsError,
