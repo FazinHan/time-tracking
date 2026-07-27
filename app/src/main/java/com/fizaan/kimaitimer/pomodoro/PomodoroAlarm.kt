@@ -9,15 +9,21 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.Ringtone
 import android.media.RingtoneManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.fizaan.kimaitimer.MainActivity
 import com.fizaan.kimaitimer.R
 import com.fizaan.kimaitimer.data.Prefs
 
-const val ALERT_CHANNEL_ID = "pomodoro-alert"
+// A channel's sound can't be changed once created, so silencing it needed a new
+// id; the original is deleted on first run.
+const val ALERT_CHANNEL_ID = "pomodoro-alert-v2"
+private const val LEGACY_ALERT_CHANNEL_ID = "pomodoro-alert"
 const val ALERT_NOTIFICATION_ID = 1002
 
 /** Extra on the launch intent naming the phase that just began. */
@@ -44,7 +50,7 @@ object PomodoroAlarm {
             return
         }
         val now = System.currentTimeMillis()
-        val at = phaseAt(start, now, prefs.pomodoroSettings).endMs
+        val at = phaseAt(start, now, prefs.pomodoroSessionSettings).endMs
         val am = context.getSystemService(AlarmManager::class.java)
         val show = PendingIntent.getActivity(
             context, ALARM_REQUEST + 1,
@@ -79,9 +85,15 @@ class PomodoroReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val prefs = Prefs(context)
         if (prefs.pomodoroStartMs <= 0L) return
-        val slot = phaseAt(prefs.pomodoroStartMs, System.currentTimeMillis(), prefs.pomodoroSettings)
+        val slot = phaseAt(
+            prefs.pomodoroStartMs, System.currentTimeMillis(), prefs.pomodoroSessionSettings,
+        )
+        val pending = goAsync()
         PomodoroAlert.show(context, slot)
         PomodoroAlarm.scheduleNext(context)
+        // The tone plays in this process, so the receiver has to outlive it —
+        // otherwise a boundary that arrives with the app closed goes quiet.
+        Handler(Looper.getMainLooper()).postDelayed({ pending.finish() }, 5_000)
     }
 }
 
@@ -96,8 +108,13 @@ class PomodoroReceiver : BroadcastReceiver() {
  */
 object PomodoroAlert {
 
+    /** Held only so playback can't be cut short by garbage collection. */
+    private var tone: Ringtone? = null
+
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.deleteNotificationChannel(LEGACY_ALERT_CHANNEL_ID)
         val channel = NotificationChannel(
             ALERT_CHANNEL_ID,
             "Pomodoro alerts",
@@ -107,17 +124,32 @@ object PomodoroAlert {
             setShowBadge(false)
             enableVibration(true)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-            // The stock notification tone: short, and already familiar.
-            setSound(
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
-                AudioAttributes.Builder()
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
-                    .build(),
-            )
+            setSound(null, null)   // the tone is played by [playTone] instead
         }
-        context.getSystemService(NotificationManager::class.java)
-            .createNotificationChannel(channel)
+        manager.createNotificationChannel(channel)
+    }
+
+    /**
+     * The alert tone.
+     *
+     * The notification can't be trusted to make the sound: it is cancelled the
+     * instant the app takes the screen, which cuts playback off, and a
+     * full-screen intent the system honours is expected to alert for itself.
+     * So the stock notification tone — short, familiar — is played here, on the
+     * alarm stream, where a boundary is still heard with the ringer turned down.
+     */
+    private fun playTone(context: Context) {
+        val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION) ?: return
+        runCatching {
+            tone?.stop()
+            tone = RingtoneManager.getRingtone(context.applicationContext, uri)?.apply {
+                audioAttributes = AudioAttributes.Builder()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .build()
+                play()
+            }
+        }
     }
 
     fun show(context: Context, slot: PhaseSlot) {
@@ -147,6 +179,7 @@ object PomodoroAlert {
             NotificationManagerCompat.from(context).notify(ALERT_NOTIFICATION_ID, notification)
         } catch (_: SecurityException) {
         }
+        playTone(context)
     }
 
     fun title(kind: Phase): String = when (kind) {

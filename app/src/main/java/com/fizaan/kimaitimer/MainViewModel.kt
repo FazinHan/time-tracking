@@ -209,6 +209,8 @@ data class PomodoroState(
     val busy: Boolean = false,
     val error: String? = null,
     val settings: PomodoroSettings = PomodoroSettings(),
+    /** The lengths the running session began with; edits wait for the next one. */
+    val sessionSettings: PomodoroSettings = PomodoroSettings(),
     val activities: List<Activity> = emptyList(),   // only the productive-tagged ones
     val startMs: Long = 0L,
     val entryId: Int? = null,
@@ -289,6 +291,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _pomodoro = MutableStateFlow(
         PomodoroState(
             settings = prefs.pomodoroSettings,
+            sessionSettings = prefs.pomodoroSessionSettings,
             startMs = prefs.pomodoroStartMs,
             entryId = prefs.pomodoroEntryId.takeIf { it >= 0 },
             activityName = prefs.pomodoroActivityName,
@@ -614,6 +617,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _pomodoro.value = _pomodoro.value.copy(
             loading = true, error = null,
             settings = prefs.pomodoroSettings,
+            sessionSettings = prefs.pomodoroSessionSettings,
             startMs = prefs.pomodoroStartMs,
             entryId = prefs.pomodoroEntryId.takeIf { it >= 0 },
             activityName = prefs.pomodoroActivityName,
@@ -650,13 +654,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissPomodoroSettings() { _pomodoro.value = _pomodoro.value.copy(showSettings = false) }
     fun clearPomodoroError() { _pomodoro.value = _pomodoro.value.copy(error = null) }
 
+    /**
+     * Saved lengths take effect on the next session: a running one keeps the
+     * shape it started with, since re-slicing it would rewrite periods already
+     * taken.
+     */
     fun savePomodoroSettings(settings: PomodoroSettings) {
         prefs.pomodoroSettings = settings
         _pomodoro.value = _pomodoro.value.copy(
             settings = prefs.pomodoroSettings, showSettings = false,
         )
-        // A running session's remaining boundaries move with the new lengths.
-        if (_pomodoro.value.running) PomodoroAlarm.scheduleNext(ctx)
     }
 
     /** Announce a boundary the app itself noticed while it was on screen. */
@@ -696,8 +703,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 prefs.pomodoroActivityId = activityId
                 prefs.pomodoroActivityName = name
                 prefs.pomodoroBeginIso = beginIso
+                prefs.pomodoroSessionSettings = _pomodoro.value.settings
                 _pomodoro.value = _pomodoro.value.copy(
                     busy = false, startMs = startMs, entryId = created.id,
+                    sessionSettings = prefs.pomodoroSessionSettings,
                     activityName = name, alert = null,
                 )
                 PomodoroAlarm.scheduleNext(ctx)
@@ -723,7 +732,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _pomodoro.value = s.copy(busy = true, error = null)
         viewModelScope.launch {
             try {
-                val summary = sessionSummary(s.startMs, System.currentTimeMillis(), s.settings)
+                val summary =
+                    sessionSummary(s.startMs, System.currentTimeMillis(), s.sessionSettings)
                 api().updateTimesheet(
                     entryId,
                     TimesheetUpdate(

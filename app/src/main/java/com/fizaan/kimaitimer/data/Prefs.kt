@@ -75,6 +75,30 @@ class Prefs(context: Context) {
                 .apply()
         }
 
+    /**
+     * The lengths a running session started with. The phase is arithmetic on
+     * the start instant, so editing the lengths mid-session would re-slice the
+     * periods already taken; freezing them here keeps a session the shape it
+     * began as and lets an edit apply to the next one. Falls back to the
+     * current settings when nothing is running.
+     */
+    var pomodoroSessionSettings: PomodoroSettings
+        get() = if (!sp.contains("pomo_run_work")) pomodoroSettings else PomodoroSettings(
+            workMinutes = sp.getInt("pomo_run_work", 25),
+            breakMinutes = sp.getInt("pomo_run_break", 5),
+            longBreakMinutes = sp.getInt("pomo_run_long", 15),
+            breaksBeforeLong = sp.getInt("pomo_run_cycle", 3),
+        )
+        set(v) {
+            val s = v.sane()
+            sp.edit()
+                .putInt("pomo_run_work", s.workMinutes)
+                .putInt("pomo_run_break", s.breakMinutes)
+                .putInt("pomo_run_long", s.longBreakMinutes)
+                .putInt("pomo_run_cycle", s.breaksBeforeLong)
+                .apply()
+        }
+
     /** Epoch millis the running session began, or 0 when none is. */
     var pomodoroStartMs: Long
         get() = sp.getLong("pomo_start", 0L)
@@ -100,5 +124,7 @@ class Prefs(context: Context) {
     fun clearPomodoroSession() = sp.edit()
         .remove("pomo_start").remove("pomo_entry").remove("pomo_activity")
         .remove("pomo_activity_name").remove("pomo_begin_iso")
+        .remove("pomo_run_work").remove("pomo_run_break")
+        .remove("pomo_run_long").remove("pomo_run_cycle")
         .apply()
 }

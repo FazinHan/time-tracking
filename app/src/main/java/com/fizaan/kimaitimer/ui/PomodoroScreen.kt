@@ -91,8 +91,8 @@ fun PomodoroScreen(
         }
     }
 
-    val slot = remember(now, state.startMs, state.settings) {
-        if (state.running) phaseAt(state.startMs, now, state.settings) else null
+    val slot = remember(now, state.startMs, state.sessionSettings) {
+        if (state.running) phaseAt(state.startMs, now, state.sessionSettings) else null
     }
     // A phase that turned over while this screen was watching is announced here;
     // one that turned over while the app was away was announced by the alarm, so
@@ -224,7 +224,7 @@ fun PomodoroScreen(
         )
     }
     state.alert?.let { kind ->
-        PhaseAlert(kind = kind, settings = state.settings, onDismiss = onDismissAlert)
+        PhaseAlert(kind = kind, settings = state.sessionSettings, onDismiss = onDismissAlert)
     }
 }
 
@@ -339,8 +339,8 @@ private fun PomodoroSettingsDialog(
                 ) { cycle = (cycle + 1).coerceAtMost(12) }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "Changing these while a session runs moves the periods " +
-                        "still to come; the ones already taken keep their old lengths.",
+                    text = "New lengths start with the next session — one already " +
+                        "running keeps the lengths it began with.",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
                 )
