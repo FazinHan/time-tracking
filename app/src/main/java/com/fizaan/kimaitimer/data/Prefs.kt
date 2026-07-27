@@ -1,6 +1,7 @@
 package com.fizaan.kimaitimer.data
 
 import android.content.Context
+import com.fizaan.kimaitimer.pomodoro.PomodoroSettings
 
 /** Simple persisted settings for the single-user personal tracker. */
 class Prefs(context: Context) {
@@ -50,4 +51,54 @@ class Prefs(context: Context) {
 
     fun setTag(activityId: Int, tags: String) =
         sp.edit().putString("tag_$activityId", tags).apply()
+
+    // ---- Pomodoro ----
+    //
+    // The lengths, plus enough about a session in flight for an alarm receiver
+    // (or a restarted process) to work out where the session stands without the
+    // app having been running in between.
+
+    var pomodoroSettings: PomodoroSettings
+        get() = PomodoroSettings(
+            workMinutes = sp.getInt("pomo_work", 25),
+            breakMinutes = sp.getInt("pomo_break", 5),
+            longBreakMinutes = sp.getInt("pomo_long", 15),
+            breaksBeforeLong = sp.getInt("pomo_cycle", 3),
+        )
+        set(v) {
+            val s = v.sane()
+            sp.edit()
+                .putInt("pomo_work", s.workMinutes)
+                .putInt("pomo_break", s.breakMinutes)
+                .putInt("pomo_long", s.longBreakMinutes)
+                .putInt("pomo_cycle", s.breaksBeforeLong)
+                .apply()
+        }
+
+    /** Epoch millis the running session began, or 0 when none is. */
+    var pomodoroStartMs: Long
+        get() = sp.getLong("pomo_start", 0L)
+        set(v) = sp.edit().putLong("pomo_start", v).apply()
+
+    var pomodoroEntryId: Int
+        get() = sp.getInt("pomo_entry", -1)
+        set(v) = sp.edit().putInt("pomo_entry", v).apply()
+
+    var pomodoroActivityId: Int
+        get() = sp.getInt("pomo_activity", -1)
+        set(v) = sp.edit().putInt("pomo_activity", v).apply()
+
+    var pomodoroActivityName: String
+        get() = sp.getString("pomo_activity_name", "") ?: ""
+        set(v) = sp.edit().putString("pomo_activity_name", v).apply()
+
+    /** The entry's begin exactly as sent to Kimai; PATCHes have to echo it. */
+    var pomodoroBeginIso: String
+        get() = sp.getString("pomo_begin_iso", "") ?: ""
+        set(v) = sp.edit().putString("pomo_begin_iso", v).apply()
+
+    fun clearPomodoroSession() = sp.edit()
+        .remove("pomo_start").remove("pomo_entry").remove("pomo_activity")
+        .remove("pomo_activity_name").remove("pomo_begin_iso")
+        .apply()
 }

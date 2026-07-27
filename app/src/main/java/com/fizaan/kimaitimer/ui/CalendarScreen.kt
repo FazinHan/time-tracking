@@ -53,6 +53,9 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
+/** The hour the grid is scrolled to when the screen opens. */
+private const val DefaultTopHour = 7
+
 /** One entry positioned within a single day, in minutes from midnight. */
 private data class DayBlock(
     val entry: TimesheetEntry,
@@ -214,14 +217,10 @@ private fun CalendarGrid(
     val blocksByDay = remember(days, entries) {
         days.associateWith { day -> blocksForDay(entries, day) }
     }
-    // Auto-scroll to the earliest entry on screen (fallback ~7am).
-    val firstMin = remember(blocksByDay) {
-        blocksByDay.values.flatten().minOfOrNull { it.startMin } ?: (7 * 60)
-    }
-    LaunchedEffect(firstMin) {
-        val hourPx = with(density) { hourHeight.toPx() }
-        val y = (firstMin / 60f - 0.5f).coerceAtLeast(0f) * hourPx
-        scroll.scrollTo(y.toInt())
+    // Open on the waking day: 07:00 sits at the top of the view, and the small
+    // hours are a scroll away rather than the first thing you see.
+    LaunchedEffect(Unit) {
+        scroll.scrollTo(with(density) { (hourHeight * DefaultTopHour).toPx() }.toInt())
     }
 
     val gridColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f)

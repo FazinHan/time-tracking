@@ -25,8 +25,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Today
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,6 +60,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fizaan.kimaitimer.PieMode
+import com.fizaan.kimaitimer.pieRange
 import com.fizaan.kimaitimer.VizPeriod
 import com.fizaan.kimaitimer.VizState
 import com.fizaan.kimaitimer.VizTab
@@ -66,7 +70,6 @@ import com.fizaan.kimaitimer.util.entryLocalDate
 import com.fizaan.kimaitimer.util.entrySeconds
 import com.fizaan.kimaitimer.util.formatDuration
 import kotlinx.coroutines.delay
-import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import kotlin.math.ceil
@@ -94,6 +97,8 @@ fun VizScreen(
     onTab: (VizTab) -> Unit,
     onPieMode: (PieMode) -> Unit,
     onPeriod: (VizPeriod) -> Unit,
+    onShiftPie: (Int) -> Unit,
+    onPieToday: () -> Unit,
     onRefresh: () -> Unit,
     onClearError: () -> Unit,
     onLegendClick: (activityId: Int?, tag: String?, from: LocalDate, to: LocalDate) -> Unit,
@@ -126,6 +131,11 @@ fun VizScreen(
                 fontSize = 18.sp,
                 modifier = Modifier.weight(1f),
             )
+            if (state.tab == VizTab.PIE && state.pieOffset != 0) {
+                IconButton(onClick = onPieToday) {
+                    Icon(Icons.Filled.Today, "Present period", tint = MaterialTheme.colorScheme.onBackground)
+                }
+            }
             IconButton(onClick = onRefresh) {
                 Icon(Icons.Filled.Refresh, "Refresh", tint = MaterialTheme.colorScheme.onBackground)
             }
@@ -152,7 +162,7 @@ fun VizScreen(
 
         Box(modifier = Modifier.weight(1f)) {
             when (state.tab) {
-                VizTab.PIE -> PieTab(state, now, onPieMode, onPeriod, onLegendClick)
+                VizTab.PIE -> PieTab(state, now, onPieMode, onPeriod, onShiftPie, onLegendClick)
                 VizTab.BAR -> BarTab(state, now, onLegendClick)
             }
             if (state.loading) {
@@ -212,12 +222,27 @@ private fun computeSlices(
     }.filter { it.seconds > 0 }.sortedByDescending { it.seconds }
 }
 
-/** First day of the pie's currently selected period (through today). */
-private fun periodFrom(period: VizPeriod, today: LocalDate): LocalDate = when (period) {
-    VizPeriod.DAY -> today
-    VizPeriod.WEEK -> today.with(DayOfWeek.MONDAY)
-    VizPeriod.MONTH -> today.withDayOfMonth(1)
-    VizPeriod.YEAR -> today.withDayOfYear(1)
+private val DayLabelFmt = DateTimeFormatter.ofPattern("EEE d MMM")
+private val DayMonthFmt = DateTimeFormatter.ofPattern("d MMM")
+private val MonthLabelFmt = DateTimeFormatter.ofPattern("MMMM yyyy")
+
+/** What the paged period is called: "Today", "20 – 26 Jul", "June 2026", "2025". */
+private fun pieRangeLabel(
+    period: VizPeriod,
+    offset: Int,
+    from: LocalDate,
+    to: LocalDate,
+): String = when (period) {
+    VizPeriod.DAY -> when (offset) {
+        0 -> "Today"
+        -1 -> "Yesterday"
+        else -> from.format(DayLabelFmt)
+    }
+    VizPeriod.WEEK ->
+        if (offset == 0) "This week"
+        else "${from.format(DayMonthFmt)} – ${to.format(DayMonthFmt)}"
+    VizPeriod.MONTH -> from.format(MonthLabelFmt)
+    VizPeriod.YEAR -> from.year.toString()
 }
 
 @Composable
@@ -226,6 +251,7 @@ private fun PieTab(
     now: Long,
     onPieMode: (PieMode) -> Unit,
     onPeriod: (VizPeriod) -> Unit,
+    onShiftPie: (Int) -> Unit,
     onLegendClick: (activityId: Int?, tag: String?, from: LocalDate, to: LocalDate) -> Unit,
 ) {
     val slices = remember(state.pieEntries, state.activities, state.pieMode, now) {
@@ -239,12 +265,45 @@ private fun PieTab(
     }
     val drawnTotal = drawnSlices.sumOf { it.seconds }
 
+    val today = LocalDate.now()
+    val (from, to) = remember(state.period, state.pieOffset, today) {
+        pieRange(state.period, state.pieOffset, today)
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        // Same paging control the calendar carries: back and forward a whole
+        // period at a time, with the present one as the forward stop.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = { onShiftPie(-1) }) {
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Previous",
+                    tint = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+            Text(
+                text = pieRangeLabel(state.period, state.pieOffset, from, to),
+                color = MaterialTheme.colorScheme.onBackground,
+                fontSize = 15.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = { onShiftPie(1) }, enabled = state.pieOffset < 0) {
+                Icon(
+                    Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next",
+                    tint = MaterialTheme.colorScheme.onBackground
+                        .copy(alpha = if (state.pieOffset < 0) 1f else 0.25f),
+                )
+            }
+        }
+
         Column(
             modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(8.dp))
             if (total == 0L && !state.loading) {
                 Spacer(Modifier.height(40.dp))
                 Text(
@@ -269,10 +328,8 @@ private fun PieTab(
                     PieChart(drawnSlices, drawnTotal, centerLabel = formatDuration(total), centerSub = "total")
                 }
                 Spacer(Modifier.height(20.dp))
-                val today = LocalDate.now()
-                val from = periodFrom(state.period, today)
                 slices.forEach { s ->
-                    LegendRow(s, total) { onLegendClick(s.activityId, s.tag, from, today) }
+                    LegendRow(s, total) { onLegendClick(s.activityId, s.tag, from, to) }
                 }
             }
             Spacer(Modifier.height(8.dp))

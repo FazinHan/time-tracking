@@ -17,6 +17,12 @@ import com.fizaan.kimaitimer.data.TimesheetCache
 import com.fizaan.kimaitimer.data.TimesheetCreate
 import com.fizaan.kimaitimer.data.TimesheetEntry
 import com.fizaan.kimaitimer.data.TimesheetUpdate
+import androidx.core.app.NotificationManagerCompat
+import com.fizaan.kimaitimer.pomodoro.ALERT_NOTIFICATION_ID
+import com.fizaan.kimaitimer.pomodoro.Phase
+import com.fizaan.kimaitimer.pomodoro.PomodoroAlarm
+import com.fizaan.kimaitimer.pomodoro.PomodoroSettings
+import com.fizaan.kimaitimer.pomodoro.sessionSummary
 import com.fizaan.kimaitimer.util.entryLocalDate
 import com.fizaan.kimaitimer.util.entrySeconds
 import com.fizaan.kimaitimer.util.formatKimai
@@ -29,9 +35,10 @@ import kotlinx.coroutines.launch
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-enum class AppScreen { TIMER, VIZ, SHEET, CALENDAR, TOOLS }
+enum class AppScreen { TIMER, POMODORO, VIZ, SHEET, CALENDAR, TOOLS }
 enum class VizTab { PIE, BAR }
 enum class PieMode { ACTIVITY, TAG }
 enum class VizPeriod { DAY, WEEK, MONTH, YEAR }
@@ -40,6 +47,9 @@ enum class SheetPeriod { ALL, DAY, WEEK, MONTH, YEAR, CUSTOM }
 /** Sentinel tag filter meaning "entries with no tags". */
 const val UNTAGGED = ""
 
+/** The tag that qualifies an activity for a pomodoro. */
+const val PRODUCTIVE_TAG = "productive"
+
 /**
  * Marks a screen as rendering locally saved data instead of a live server
  * response. [savedAt] is when that data was last downloaded, [reason] why the
@@ -47,7 +57,11 @@ const val UNTAGGED = ""
  */
 data class CacheInfo(val savedAt: Long, val reason: String)
 
-/** Visualisation screen state. Entries are refetched on every open/change. */
+/**
+ * Visualisation screen state. Entries are refetched on every open/change.
+ * [pieOffset] counts whole periods back from the present one — 0 is today /
+ * this week / this month / this year, -1 the one before it, and so on.
+ */
 data class VizState(
     val loading: Boolean = false,
     val error: String? = null,
@@ -55,10 +69,29 @@ data class VizState(
     val tab: VizTab = VizTab.PIE,
     val pieMode: PieMode = PieMode.ACTIVITY,
     val period: VizPeriod = VizPeriod.DAY,
+    val pieOffset: Int = 0,
     val pieEntries: List<TimesheetEntry> = emptyList(),
     val barEntries: List<TimesheetEntry> = emptyList(),   // last 30 days
     val activities: List<Activity> = emptyList(),
 )
+
+/**
+ * The calendar days a pie covers, both ends inclusive. [offset] steps whole
+ * periods into the past; the current period is never cut short at today, so a
+ * past month reads as the whole month.
+ */
+fun pieRange(period: VizPeriod, offset: Int, today: LocalDate): Pair<LocalDate, LocalDate> {
+    val n = offset.toLong()
+    return when (period) {
+        VizPeriod.DAY -> today.plusDays(n).let { it to it }
+        VizPeriod.WEEK -> today.with(DayOfWeek.MONDAY).plusWeeks(n)
+            .let { it to it.plusDays(6) }
+        VizPeriod.MONTH -> today.withDayOfMonth(1).plusMonths(n)
+            .let { it to it.plusMonths(1).minusDays(1) }
+        VizPeriod.YEAR -> today.withDayOfYear(1).plusYears(n)
+            .let { it to it.plusYears(1).minusDays(1) }
+    }
+}
 
 /** Timesheet screen state. */
 data class SheetState(
@@ -166,6 +199,27 @@ data class ToolsState(
     val batch: BatchState = BatchState(),
 )
 
+/**
+ * Pomodoro state. A session is one unbroken Kimai entry — [entryId], begun at
+ * [startMs] — and the work/break phase is derived from that instant, never
+ * counted, so nothing drifts while the app is closed.
+ */
+data class PomodoroState(
+    val loading: Boolean = false,
+    val busy: Boolean = false,
+    val error: String? = null,
+    val settings: PomodoroSettings = PomodoroSettings(),
+    val activities: List<Activity> = emptyList(),   // only the productive-tagged ones
+    val startMs: Long = 0L,
+    val entryId: Int? = null,
+    val activityName: String = "",
+    val showPicker: Boolean = false,
+    val showSettings: Boolean = false,
+    val alert: Phase? = null,                       // a boundary just passed
+) {
+    val running: Boolean get() = startMs > 0L && entryId != null
+}
+
 /** Whole-app UI state. */
 data class UiState(
     val configured: Boolean = false,
@@ -208,6 +262,7 @@ data class SetupState(
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
+    private val ctx = app
     private val prefs = Prefs(app)
     private val cache = TimesheetCache(app)
     private val notifier = RunningNotifier(app)
@@ -230,6 +285,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _tools = MutableStateFlow(ToolsState())
     val tools: StateFlow<ToolsState> = _tools.asStateFlow()
+
+    private val _pomodoro = MutableStateFlow(
+        PomodoroState(
+            settings = prefs.pomodoroSettings,
+            startMs = prefs.pomodoroStartMs,
+            entryId = prefs.pomodoroEntryId.takeIf { it >= 0 },
+            activityName = prefs.pomodoroActivityName,
+        )
+    )
+    val pomodoro: StateFlow<PomodoroState> = _pomodoro.asStateFlow()
 
     init {
         if (prefs.isConfigured) {
@@ -514,11 +579,176 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value = _ui.value.copy(screen = screen)
         when (screen) {
             AppScreen.TIMER -> refresh()
+            AppScreen.POMODORO -> loadPomodoro()
             AppScreen.VIZ -> loadViz()
             AppScreen.SHEET -> loadSheet()
             AppScreen.CALENDAR -> loadCalendar()
             AppScreen.TOOLS -> loadTools()
         }
+    }
+
+    // ---------------- Pomodoro ----------------
+
+    /**
+     * The activities a pomodoro may be spent on: those tagged "productive".
+     * Tags live on timesheet entries rather than on activities, so an activity
+     * counts as productive if it is remembered that way on this device or if
+     * its recent entries on the server were tagged so.
+     */
+    private fun productiveActivities(
+        all: List<Activity>,
+        history: List<TimesheetEntry>,
+    ): List<Activity> {
+        val fromServer = history
+            .filter { e -> e.tags.orEmpty().any { it.equals(PRODUCTIVE_TAG, ignoreCase = true) } }
+            .map { it.activity }
+            .toSet()
+        return all.filter { act ->
+            act.id in fromServer || prefs.tagFor(act.id).orEmpty()
+                .split(",").any { it.trim().equals(PRODUCTIVE_TAG, ignoreCase = true) }
+        }
+    }
+
+    /** Refresh the picker's activity list and re-sync a session left running. */
+    fun loadPomodoro() {
+        _pomodoro.value = _pomodoro.value.copy(
+            loading = true, error = null,
+            settings = prefs.pomodoroSettings,
+            startMs = prefs.pomodoroStartMs,
+            entryId = prefs.pomodoroEntryId.takeIf { it >= 0 },
+            activityName = prefs.pomodoroActivityName,
+        )
+        // An alarm may have been missed while the app was dead; re-arm the next.
+        // With no session there is nothing to arm and nothing left to announce.
+        if (prefs.pomodoroStartMs > 0L) PomodoroAlarm.scheduleNext(ctx)
+        else PomodoroAlarm.cancel(ctx)
+        viewModelScope.launch {
+            try {
+                val acts = api().activities().filter { it.visible }.sortedBy { it.name.lowercase() }
+                val today = LocalDate.now()
+                val history = api().timesheets(
+                    begin = formatKimai(today.minusDays(90).atStartOfDay()),
+                    end = formatKimai(today.plusDays(1).atStartOfDay()),
+                )
+                // The session may have been stopped elsewhere (the timer screen,
+                // Kimai itself); don't keep showing a clock for a dead entry.
+                val id = _pomodoro.value.entryId
+                if (id != null && api().active().none { it.id == id }) clearPomodoroSession()
+                _pomodoro.value = _pomodoro.value.copy(
+                    loading = false,
+                    activities = productiveActivities(acts, history),
+                )
+            } catch (e: Exception) {
+                _pomodoro.value = _pomodoro.value.copy(loading = false, error = friendly(e))
+            }
+        }
+    }
+
+    fun openPomodoroPicker() { _pomodoro.value = _pomodoro.value.copy(showPicker = true, error = null) }
+    fun dismissPomodoroPicker() { _pomodoro.value = _pomodoro.value.copy(showPicker = false) }
+    fun openPomodoroSettings() { _pomodoro.value = _pomodoro.value.copy(showSettings = true) }
+    fun dismissPomodoroSettings() { _pomodoro.value = _pomodoro.value.copy(showSettings = false) }
+    fun clearPomodoroError() { _pomodoro.value = _pomodoro.value.copy(error = null) }
+
+    fun savePomodoroSettings(settings: PomodoroSettings) {
+        prefs.pomodoroSettings = settings
+        _pomodoro.value = _pomodoro.value.copy(
+            settings = prefs.pomodoroSettings, showSettings = false,
+        )
+        // A running session's remaining boundaries move with the new lengths.
+        if (_pomodoro.value.running) PomodoroAlarm.scheduleNext(ctx)
+    }
+
+    /** Announce a boundary the app itself noticed while it was on screen. */
+    fun onPomodoroPhaseStarted(kind: Phase) {
+        NotificationManagerCompat.from(ctx).cancel(ALERT_NOTIFICATION_ID)
+        _pomodoro.value = _pomodoro.value.copy(alert = kind)
+    }
+
+    fun dismissPomodoroAlert() {
+        NotificationManagerCompat.from(ctx).cancel(ALERT_NOTIFICATION_ID)
+        _pomodoro.value = _pomodoro.value.copy(alert = null)
+    }
+
+    /**
+     * Begin a session: one Kimai entry that stays open across every work and
+     * break period, plus the alarm for the first boundary.
+     */
+    fun startPomodoro(activityId: Int) {
+        val name = _pomodoro.value.activities.firstOrNull { it.id == activityId }?.name ?: ""
+        _pomodoro.value = _pomodoro.value.copy(busy = true, showPicker = false, error = null)
+        viewModelScope.launch {
+            try {
+                val begin = LocalDateTime.now()
+                val beginIso = begin.format(beginFormat)
+                val created = api().createTimesheet(
+                    TimesheetCreate(
+                        begin = beginIso,
+                        project = prefs.projectId,
+                        activity = activityId,
+                        description = null,
+                        tags = (prefs.tagFor(activityId)?.ifBlank { null } ?: PRODUCTIVE_TAG),
+                    )
+                )
+                val startMs = begin.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                prefs.pomodoroStartMs = startMs
+                prefs.pomodoroEntryId = created.id
+                prefs.pomodoroActivityId = activityId
+                prefs.pomodoroActivityName = name
+                prefs.pomodoroBeginIso = beginIso
+                _pomodoro.value = _pomodoro.value.copy(
+                    busy = false, startMs = startMs, entryId = created.id,
+                    activityName = name, alert = null,
+                )
+                PomodoroAlarm.scheduleNext(ctx)
+                refresh()
+            } catch (e: Exception) {
+                val message = if (_ui.value.running != null && e.message?.contains("400") == true) {
+                    "Kimai refused another timer while one is already running."
+                } else {
+                    friendly(e)
+                }
+                _pomodoro.value = _pomodoro.value.copy(busy = false, error = message)
+            }
+        }
+    }
+
+    /**
+     * End the session. The breakdown of work and break periods exists nowhere
+     * else, so it is written into the entry's description before it is stopped.
+     */
+    fun stopPomodoro() {
+        val s = _pomodoro.value
+        val entryId = s.entryId ?: return
+        _pomodoro.value = s.copy(busy = true, error = null)
+        viewModelScope.launch {
+            try {
+                val summary = sessionSummary(s.startMs, System.currentTimeMillis(), s.settings)
+                api().updateTimesheet(
+                    entryId,
+                    TimesheetUpdate(
+                        begin = prefs.pomodoroBeginIso.ifBlank {
+                            formatKimai(LocalDateTime.now())
+                        },
+                        description = summary,
+                    ),
+                )
+                api().stop(entryId)
+                clearPomodoroSession()
+                _pomodoro.value = _pomodoro.value.copy(busy = false)
+                refresh()
+            } catch (e: Exception) {
+                _pomodoro.value = _pomodoro.value.copy(busy = false, error = friendly(e))
+            }
+        }
+    }
+
+    private fun clearPomodoroSession() {
+        PomodoroAlarm.cancel(ctx)
+        prefs.clearPomodoroSession()
+        _pomodoro.value = _pomodoro.value.copy(
+            startMs = 0L, entryId = null, activityName = "", alert = null,
+        )
     }
 
     // ---------------- Calendar ----------------
@@ -923,17 +1153,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setPieMode(mode: PieMode) { _viz.value = _viz.value.copy(pieMode = mode) }
 
+    /** Changing the granularity drops back to the present period. */
     fun setPeriod(period: VizPeriod) {
-        _viz.value = _viz.value.copy(period = period)
+        _viz.value = _viz.value.copy(period = period, pieOffset = 0)
         loadViz()
     }
 
-    /** Period start for the pie query (calendar day / ISO week / month / year). */
-    private fun periodStart(period: VizPeriod, today: LocalDate): LocalDate = when (period) {
-        VizPeriod.DAY -> today
-        VizPeriod.WEEK -> today.with(DayOfWeek.MONDAY)
-        VizPeriod.MONTH -> today.withDayOfMonth(1)
-        VizPeriod.YEAR -> today.withDayOfYear(1)
+    /** Page the pie one period back ([delta] < 0) or forward; never past the present. */
+    fun shiftPie(delta: Int) {
+        val next = (_viz.value.pieOffset + delta).coerceAtMost(0)
+        if (next == _viz.value.pieOffset) return
+        _viz.value = _viz.value.copy(pieOffset = next)
+        loadViz()
+    }
+
+    fun pieToday() {
+        if (_viz.value.pieOffset == 0) return
+        _viz.value = _viz.value.copy(pieOffset = 0)
+        loadViz()
     }
 
     /** Fetch everything the viz screen needs, falling back to saved data. */
@@ -941,18 +1178,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _viz.value = _viz.value.copy(loading = true, error = null)
         viewModelScope.launch {
             val today = LocalDate.now()
-            val pieBegin = periodStart(_viz.value.period, today).atStartOfDay()
+            val (pieFrom, pieTo) = pieRange(_viz.value.period, _viz.value.pieOffset, today)
+            val pieBegin = pieFrom.atStartOfDay()
+            val pieEnd = pieTo.plusDays(1).atStartOfDay()
             val barBegin = today.minusDays(29).atStartOfDay()
             val end = today.plusDays(1).atStartOfDay()
             try {
                 val acts = api().activities()
                 val pie = api().timesheets(
-                    begin = formatKimai(pieBegin), end = formatKimai(end),
+                    begin = formatKimai(pieBegin), end = formatKimai(pieEnd),
                 )
                 val bar = api().timesheets(
                     begin = formatKimai(barBegin), end = formatKimai(end),
                 )
-                cache.save(pieBegin, end, pie, acts)
+                cache.save(pieBegin, pieEnd, pie, acts)
                 cache.save(barBegin, end, bar, acts)
                 _viz.value = _viz.value.copy(
                     loading = false, pieEntries = pie, barEntries = bar,
@@ -965,7 +1204,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     _viz.value.copy(
                         loading = false,
-                        pieEntries = saved.first.between(pieBegin, end),
+                        pieEntries = saved.first.between(pieBegin, pieEnd),
                         barEntries = saved.first.between(barBegin, end),
                         activities = saved.first.activities,
                         cached = saved.second,

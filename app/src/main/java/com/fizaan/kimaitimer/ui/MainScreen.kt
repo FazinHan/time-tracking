@@ -280,12 +280,24 @@ private fun StopChoiceDialog(
     )
 }
 
+/**
+ * The one big circle the whole app is driven from: green play when idle,
+ * pulsating stop when a timer runs. [accent] and [pulse] exist for the pomodoro,
+ * whose work periods want the same button drained of colour and movement.
+ */
 @Composable
-private fun BigButton(running: Boolean, busy: Boolean, onClick: () -> Unit) {
+internal fun BigButton(
+    running: Boolean,
+    busy: Boolean,
+    onClick: () -> Unit,
+    accent: Color = KimaiRed,
+    pulse: Boolean = true,
+) {
+    val animate = running && pulse
     val transition = rememberInfiniteTransition(label = "pulse")
     val scale by transition.animateFloat(
         initialValue = 1f,
-        targetValue = if (running) 1.08f else 1f,
+        targetValue = if (animate) 1.08f else 1f,
         animationSpec = infiniteRepeatable(
             animation = tween(1300),
             repeatMode = RepeatMode.Reverse,
@@ -293,8 +305,8 @@ private fun BigButton(running: Boolean, busy: Boolean, onClick: () -> Unit) {
         label = "scale",
     )
     val ringAlpha by transition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = if (running) 1f else 0.35f,
+        initialValue = if (animate) 0.35f else 1f,
+        targetValue = 1f,
         animationSpec = infiniteRepeatable(
             animation = tween(1300),
             repeatMode = RepeatMode.Reverse,
@@ -305,20 +317,20 @@ private fun BigButton(running: Boolean, busy: Boolean, onClick: () -> Unit) {
     val size = 220.dp
     Box(contentAlignment = Alignment.Center) {
         if (running) {
-            // Red pulsating outlined stop button
+            // Pulsating outlined stop button
             Box(
                 modifier = Modifier
                     .size(size)
                     .scale(scale)
-                    .border(BorderStroke(6.dp, KimaiRed.copy(alpha = ringAlpha)), CircleShape)
-                    .background(KimaiRed.copy(alpha = 0.10f), CircleShape)
+                    .border(BorderStroke(6.dp, accent.copy(alpha = ringAlpha)), CircleShape)
+                    .background(accent.copy(alpha = 0.10f), CircleShape)
                     .clickable(enabled = !busy) { onClick() },
                 contentAlignment = Alignment.Center,
             ) {
                 if (busy) {
-                    CircularProgressIndicator(color = KimaiRed)
+                    CircularProgressIndicator(color = accent)
                 } else {
-                    Icon(Icons.Filled.Stop, "Stop", tint = KimaiRed, modifier = Modifier.size(96.dp))
+                    Icon(Icons.Filled.Stop, "Stop", tint = accent, modifier = Modifier.size(96.dp))
                 }
             }
         } else {
