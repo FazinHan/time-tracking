@@ -2,6 +2,8 @@ package com.fizaan.timetracker.data
 
 import android.content.Context
 import androidx.compose.ui.graphics.toArgb
+import com.fizaan.timetracker.DefaultIconVariant
+import com.fizaan.timetracker.IconVariant
 import com.fizaan.timetracker.pomodoro.PomodoroSettings
 import com.fizaan.timetracker.ui.DefaultAccent
 
@@ -46,6 +48,13 @@ class Prefs(context: Context) {
     var accentColor: Int
         get() = sp.getInt("accent_color", DefaultAccent.toArgb())
         set(v) = sp.edit().putInt("accent_color", v).apply()
+
+    /** Which launcher-icon alias is currently the enabled one. */
+    var iconVariant: IconVariant
+        get() = sp.getString("icon_variant", null)
+            ?.let { name -> IconVariant.entries.firstOrNull { it.name == name } }
+            ?: DefaultIconVariant
+        set(v) = sp.edit().putString("icon_variant", v.name).apply()
 
     // ---- Per-activity tag memory ----
     //

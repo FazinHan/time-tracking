@@ -315,6 +315,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setAccent(argb: Int) {
         prefs.accentColor = argb
         _ui.value = _ui.value.copy(accent = argb)
+        // The launcher gets the nearest of the prebuilt icons, if that changed.
+        LauncherIcon.apply(ctx, argb)
     }
 
     private fun defaultUrlHint(): String =
