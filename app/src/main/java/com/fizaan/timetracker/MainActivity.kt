@@ -150,6 +150,8 @@ class MainActivity : ComponentActivity() {
                         onSelectCustomer = vm::onSelectCustomer,
                         onSelectProject = vm::onSelectProject,
                         onFinish = vm::finishSetup,
+                        onServerless = vm::onServerless,
+                        onFinishLocal = vm::finishLocalSetup,
                         accent = ui.accent,
                         onAccent = vm::setAccent,
                     )

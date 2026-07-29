@@ -198,14 +198,19 @@ private fun ToolList(
 }
 
 /**
- * How much timesheet history is held on the device. The cap is what keeps the
- * tools usable offline without letting the store grow without bound.
+ * How much timesheet history is held on the device. Backed by a server that is
+ * a capped offline copy; local-only it is the database itself, and uncapped.
  */
 @Composable
 private fun StorageFooter(state: ToolsState) {
     Text(
-        text = "Saved data: ${formatBytes(state.cacheBytes)} of " +
-            "${formatBytes(CACHE_MAX_BYTES)} · ${state.cacheEntries} entries",
+        text = if (state.serverless) {
+            "On this device: ${formatBytes(state.cacheBytes)} · " +
+                "${state.cacheEntries} entries · no limit"
+        } else {
+            "Saved data: ${formatBytes(state.cacheBytes)} of " +
+                "${formatBytes(CACHE_MAX_BYTES)} · ${state.cacheEntries} entries"
+        },
         fontSize = 12.sp,
         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
         modifier = Modifier.padding(top = 12.dp),

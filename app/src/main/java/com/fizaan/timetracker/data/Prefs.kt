@@ -42,8 +42,17 @@ class Prefs(context: Context) {
         get() = sp.getString("customer_name", "") ?: ""
         set(v) = sp.edit().putString("customer_name", v).apply()
 
+    /**
+     * Local-only mode: the app keeps everything on the device and never
+     * contacts a server. Set at setup and switchable there afterwards.
+     */
+    var serverless: Boolean
+        get() = sp.getBoolean("serverless", false)
+        set(v) = sp.edit().putBoolean("serverless", v).apply()
+
     val isConfigured: Boolean
-        get() = baseUrl.isNotBlank() && token.isNotBlank() && projectId >= 0
+        get() = if (serverless) projectId >= 0
+        else baseUrl.isNotBlank() && token.isNotBlank() && projectId >= 0
 
     /** Packed ARGB of the accent every themed element is drawn from. */
     var accentColor: Int

@@ -1,8 +1,11 @@
 # Time Tracker
 
-An Android front-end for a **self-hosted [Kimai](https://www.kimai.org/) server**. Start and stop timers, run a pomodoro, edit past entries, and see where your time actually went — without opening the Kimai web UI.
+Start and stop timers, run a pomodoro, edit past entries, and see where your time actually went. It runs two ways, chosen at setup:
 
-This is a client, not a tracker in its own right. **It stores no time data of its own**: every entry lives on your Kimai instance, and the app is useless without one. See [Requirements](#requirements).
+- **Against a self-hosted [Kimai](https://www.kimai.org/) server** — the app is a front-end, every entry lives on your instance, and you never open the web UI.
+- **On the device alone** — no server, no account, no network. Everything is stored in the app's own storage on the phone.
+
+Either way nothing is sent anywhere else: there is no hosted account, no sign-up, and no server run by this project.
 
 ---
 
@@ -10,12 +13,24 @@ This is a client, not a tracker in its own right. **It stores no time data of it
 
 | | |
 |---|---|
-| **A Kimai server you control** | Kimai 2.x, reachable from the phone. Self-hosted is the only supported setup — there is no hosted account, no sign-up, and no server run by this project. |
-| **An API token** | Kimai → *User → API Access*. Legacy `X-AUTH` credentials also work for older servers. |
-| **One project to track against** | Chosen once during setup; all activities come from it. |
 | **Android 8.0 (API 26) or newer** | Built and tested against Android 16 (API 36). |
+| **A Kimai server you control** | *Server mode only.* Kimai 2.x, reachable from the phone. |
+| **An API token** | *Server mode only.* Kimai → *User → API Access*. Legacy `X-AUTH` credentials also work for older servers. |
+| **One project to track against** | *Server mode only*, chosen once during setup; all activities come from it. Local-only mode makes its own. |
 
-The phone has to reach the server: same LAN, a VPN such as Tailscale, or a public HTTPS host. Cleartext HTTP is permitted by the app so a LAN address like `http://192.168.0.110:8000` works.
+In server mode the phone has to reach the server: same LAN, a VPN such as Tailscale, or a public HTTPS host. Cleartext HTTP is permitted by the app so a LAN address like `http://192.168.0.110:8000` works.
+
+### Local-only mode
+
+Switch on **Do not use server** during setup and the URL and token fields disappear — nothing else is needed. Activities are created in the app, and the whole history lives in one file in the app's private storage.
+
+Three things are worth knowing before choosing it:
+
+- **Nothing is backed up.** The data exists on that phone and nowhere else. Clearing the app's data or losing the phone takes the history with it.
+- **There is no size limit.** Unlike the offline cache, the local store is never pruned.
+- **It never merges with a server.** Local data is not uploaded to a server configured afterwards; switching to one starts the app over on the server's data, and the local file is simply left alone until you switch back.
+
+Turning it on for an install that *had* a server keeps that server's cached data visible — the app carries on the way it does when the server is unreachable, except it no longer even tries to reach it. From then on, new entries are written locally.
 
 ---
 
@@ -30,6 +45,7 @@ The phone has to reach the server: same LAN, a VPN such as Tailscale, or a publi
    ./gradlew installDebug
    ```
 3. Launch the app. On first run it opens straight into setup:
+   - **Do not use server** — switch on to keep everything on the device; the fields below disappear and **Use this device only** finishes setup (see [Local-only mode](#local-only-mode))
    - **Server URL** — e.g. `http://192.168.0.110:8000`
    - **API token** — from Kimai under *User → API Access*
    - **Legacy auth** — switch on only for older Kimai servers that want a username + API password
@@ -59,7 +75,7 @@ The home screen: one big button.
 
 ### Pomodoro
 
-A pomodoro session is **one unbroken Kimai entry** covering all of its work and break periods, not one entry per period.
+A pomodoro session is **one unbroken entry** covering all of its work and break periods, not one entry per period.
 
 - Start it the same way — the picker offers only activities tagged **`productive`**.
 - The lengths (gear, top right) are **work**, **break**, **long break**, and **how many breaks before a long one** — 25 / 5 / 15 / 3 by default. Edits apply to the *next* session; one already running keeps the lengths it began with.
@@ -73,7 +89,7 @@ A pomodoro session is **one unbroken Kimai entry** covering all of its work and 
 
 - **Pie** — share of time by **activity** or by **tag**, over a **day / week / month / year**. Arrows page back through previous periods, and a button in the bar returns to the present. Tapping a legend row opens the Timesheet filtered to it.
 - **Bar** — daily totals over the last 30 days.
-- Colours come from the activity's own colour on the server, falling back to a fixed accessible palette so an activity always keeps the same slot.
+- Colours come from the activity's own colour, falling back to a fixed accessible palette so an activity always keeps the same slot.
 
 ### Timesheet
 
@@ -95,7 +111,7 @@ A week-view grid of entries laid out against the clock.
 
 - **Frequency** — for one activity over a date range: how many sessions, total time, and how often it happens per active day/week/month/year. Empty periods are excluded so the rate reflects when you actually did it, plus a full-year projection of the time.
 - **Batch edit** — narrow entries down by activity, tag, duration and date range, then apply one action to all of them: rename the activity, move them to another activity, set tags, set a colour, or delete. Deletion asks twice.
-- **Storage** — how much the offline cache is holding.
+- **Storage** — how much the offline cache is holding, or, local-only, how big the database itself has grown.
 
 ---
 
@@ -114,7 +130,9 @@ The **stop button and running-timer red are deliberately exempt** — a live tim
 
 ## Offline behaviour
 
-Timesheet, calendar, visualisation and tool data is cached on the device after each successful load. When the server can't be reached, those screens render the cached copy behind an amber banner saying how old it is and why. Starting and stopping timers still needs the server.
+*Server mode only.* Timesheet, calendar, visualisation and tool data is cached on the device after each successful load. When the server can't be reached, those screens render the cached copy behind an amber banner saying how old it is and why. Starting and stopping timers still needs the server.
+
+Local-only mode has nothing to be offline from: every screen reads the device, and the banner never appears.
 
 ---
 
@@ -124,7 +142,8 @@ Timesheet, calendar, visualisation and tool data is cached on the device after e
 - MVVM — a single `AndroidViewModel` with `StateFlow` per screen
 - Retrofit + Moshi + OkHttp against the Kimai REST API
 - `AlarmManager.setAlarmClock` + a full-screen-intent notification for pomodoro boundaries
-- `SharedPreferences` for settings, a JSON file cache for offline data
+- `SharedPreferences` for settings; JSON files for the offline cache and the local-only database
+- Local-only mode is the same `KimaiApi` interface implemented against a file, so no screen knows the difference
 
 ## Project structure
 
@@ -138,7 +157,9 @@ app/src/main/java/com/fizaan/timetracker/
 │   ├── AuthInterceptor.kt # Bearer / legacy auth headers
 │   ├── Models.kt          # API data classes
 │   ├── Prefs.kt           # SharedPreferences wrapper
-│   └── TimesheetCache.kt  # Offline snapshot of the last good load
+│   ├── TimesheetCache.kt  # Offline snapshot of the last good load
+│   ├── LocalStore.kt      # The database of a local-only install
+│   └── LocalApi.kt        # KimaiApi implemented against LocalStore
 ├── pomodoro/
 │   ├── Pomodoro.kt        # Phase arithmetic and session summary (pure)
 │   └── PomodoroAlarm.kt   # Boundary alarm, receiver, full-screen alert
@@ -158,7 +179,8 @@ app/src/main/java/com/fizaan/timetracker/
 
 ## Notes and limitations
 
-- **Single project.** Everything is scoped to the one project chosen at setup.
+- **Single project.** Everything is scoped to the one project chosen at setup (local-only mode has exactly one).
+- **Two timers at once**, in both modes — the local store enforces the same ceiling Kimai does.
 - **Kimai rounds to the minute** (begin down, end up), so a summary's elapsed total can differ from an entry's stored duration by up to a minute.
 - The app is **dark only** — the system light/dark setting is ignored.
 - Auto Backup is on, which means the API token can be included in a Google account backup. Turn `android:allowBackup` off in the manifest if that matters to you.

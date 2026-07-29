@@ -9,6 +9,9 @@ import com.fizaan.timetracker.data.ActivityCreate
 import com.fizaan.timetracker.data.ActivityNameUpdate
 import com.fizaan.timetracker.data.ApiProvider
 import com.fizaan.timetracker.data.CacheSnapshot
+import com.fizaan.timetracker.data.LOCAL_ID
+import com.fizaan.timetracker.data.LOCAL_NAME
+import com.fizaan.timetracker.data.LocalStore
 import com.fizaan.timetracker.data.Customer
 import com.fizaan.timetracker.data.Prefs
 import com.fizaan.timetracker.data.Project
@@ -187,6 +190,8 @@ data class BatchState(
 /** Tools screen state. Currently hosts the frequency calculator. */
 data class ToolsState(
     val loading: Boolean = false,
+    /** Local-only install: the stored data is the database, and it has no cap. */
+    val serverless: Boolean = false,
     val error: String? = null,
     val cached: CacheInfo? = null,
     val computing: Boolean = false,
@@ -261,6 +266,10 @@ data class UiState(
 /** Setup-flow state (first run / reconfigure). */
 data class SetupState(
     val step: Int = 0,                  // 0 = credentials, 1 = pick customer+project
+    /** Local-only: no server is contacted, and the URL/token are irrelevant. */
+    val serverless: Boolean = false,
+    /** Whether a server was ever configured — decides which warning is shown. */
+    val hadServer: Boolean = false,
     val baseUrl: String = "",
     val token: String = "",
     val useLegacy: Boolean = false,
@@ -277,13 +286,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val ctx = app
     private val prefs = Prefs(app)
     private val cache = TimesheetCache(app)
+    private val localStore = LocalStore(app)
     private val notifier = RunningNotifier(app)
     private val beginFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
 
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui.asStateFlow()
 
-    private val _setup = MutableStateFlow(SetupState(baseUrl = defaultUrlHint()))
+    private val _setup = MutableStateFlow(
+        SetupState(
+            baseUrl = defaultUrlHint(),
+            serverless = prefs.serverless,
+            hadServer = prefs.baseUrl.isNotBlank(),
+        )
+    )
     val setup: StateFlow<SetupState> = _setup.asStateFlow()
 
     private val _viz = MutableStateFlow(VizState())
@@ -329,7 +345,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun defaultUrlHint(): String =
         if (prefs.baseUrl.isNotBlank()) prefs.baseUrl else "http://192.168.0.110:8000"
 
-    private fun api() = ApiProvider.get(prefs)
+    private fun api() = ApiProvider.get(ctx, prefs)
 
     // ---------------- Setup flow ----------------
 
@@ -337,6 +353,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun onToken(v: String) { _setup.value = _setup.value.copy(token = v) }
     fun onLegacyUser(v: String) { _setup.value = _setup.value.copy(legacyUser = v) }
     fun onUseLegacy(v: Boolean) { _setup.value = _setup.value.copy(useLegacy = v) }
+
+    /** Flip between local-only and server-backed. Nothing is committed until saved. */
+    fun onServerless(v: Boolean) {
+        _setup.value = _setup.value.copy(serverless = v, error = null, step = 0)
+    }
+
+    /**
+     * Commit local-only mode: one synthetic customer and project to hang
+     * everything off, and — for an install that had a server — whatever the
+     * offline cache still holds, so the app looks the way it does with the
+     * server unreachable rather than empty. Nothing local is ever uploaded.
+     */
+    fun finishLocalSetup() {
+        _setup.value = _setup.value.copy(testing = true, error = null)
+        viewModelScope.launch {
+            localStore.seedFrom(cache.snapshot())
+            prefs.serverless = true
+            prefs.projectId = LOCAL_ID
+            prefs.projectName = LOCAL_NAME
+            prefs.customerName = LOCAL_NAME
+            ApiProvider.invalidate()
+            _setup.value = _setup.value.copy(testing = false)
+            _ui.value = _ui.value.copy(configured = true, projectName = prefs.projectName)
+            refresh()
+        }
+    }
     fun onSelectCustomer(id: Int) {
         val projects = _setup.value.projects.filter { it.customer == null || it.customer == id }
         _setup.value = _setup.value.copy(
@@ -381,6 +423,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun finishSetup() {
         val s = _setup.value
+        prefs.serverless = false
+        ApiProvider.invalidate()
         val projectId = s.selectedProjectId ?: return
         val project = s.projects.firstOrNull { it.id == projectId }
         val customer = s.customers.firstOrNull { it.id == s.selectedCustomerId }
@@ -398,6 +442,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             token = prefs.token,
             useLegacy = prefs.authMode == "legacy",
             legacyUser = prefs.legacyUser,
+            serverless = prefs.serverless,
+            hadServer = prefs.baseUrl.isNotBlank(),
         )
         _ui.value = _ui.value.copy(configured = false)
     }
@@ -882,9 +928,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             }
-            val stats = cache.stats()
+            // Local-only: report the real database, not the disposable copy.
+            val stats = if (prefs.serverless) localStore.stats() else cache.stats()
             _tools.value = _tools.value.copy(
                 cacheBytes = stats.bytes, cacheEntries = stats.entries,
+                serverless = prefs.serverless,
             )
         }
     }
@@ -937,9 +985,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             }
-            val stats = cache.stats()
+            // Local-only: report the real database, not the disposable copy.
+            val stats = if (prefs.serverless) localStore.stats() else cache.stats()
             _tools.value = _tools.value.copy(
                 cacheBytes = stats.bytes, cacheEntries = stats.entries,
+                serverless = prefs.serverless,
             )
         }
     }

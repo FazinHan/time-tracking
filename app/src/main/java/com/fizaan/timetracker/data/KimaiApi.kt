@@ -1,5 +1,6 @@
 package com.fizaan.timetracker.data
 
+import android.content.Context
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.OkHttpClient
@@ -72,15 +73,22 @@ interface KimaiApi {
 }
 
 /**
- * Builds (and caches) a Retrofit client. The auth header is injected per-request
- * from [Prefs], so token changes take effect without rebuilding. The client is
- * rebuilt only when the base URL changes.
+ * Hands out whatever is playing the part of the server.
+ *
+ * On a local-only install that is [LocalApi], reading and writing a file on the
+ * device; otherwise it is a Retrofit client, whose auth header is injected
+ * per-request from [Prefs] so token changes take effect without rebuilding. The
+ * client is rebuilt only when the base URL changes.
  */
 object ApiProvider {
     @Volatile private var cachedUrl: String? = null
     @Volatile private var cached: KimaiApi? = null
+    @Volatile private var local: LocalApi? = null
 
-    fun get(prefs: Prefs): KimaiApi {
+    fun get(context: Context, prefs: Prefs): KimaiApi {
+        if (prefs.serverless) {
+            return local ?: LocalApi(LocalStore(context.applicationContext)).also { local = it }
+        }
         val base = normalize(prefs.baseUrl)
         val existing = cached
         if (existing != null && cachedUrl == base) return existing
@@ -90,10 +98,11 @@ object ApiProvider {
         }
     }
 
-    /** Force a fresh client (e.g. after the base URL is reconfigured). */
+    /** Force a fresh client (e.g. after the base URL or the mode changes). */
     fun invalidate() {
         cached = null
         cachedUrl = null
+        local = null
     }
 
     private fun normalize(url: String): String {

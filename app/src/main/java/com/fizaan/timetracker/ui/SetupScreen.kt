@@ -55,6 +55,8 @@ fun SetupScreen(
     onSelectCustomer: (Int) -> Unit,
     onSelectProject: (Int) -> Unit,
     onFinish: () -> Unit,
+    onServerless: (Boolean) -> Unit,
+    onFinishLocal: () -> Unit,
     accent: Int,
     onAccent: (Int) -> Unit,
 ) {
@@ -75,55 +77,85 @@ fun SetupScreen(
 
         if (state.step == 0) {
             Text(
-                "Connect to your Kimai server.",
+                if (state.serverless) "Keep everything on this device."
+                else "Connect to your Kimai server.",
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
             )
-            OutlinedTextField(
-                value = state.baseUrl,
-                onValueChange = onUrl,
-                label = { Text("Server URL") },
-                placeholder = { Text("http://192.168.0.110:8000") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = state.token,
-                onValueChange = onToken,
-                label = { Text(if (state.useLegacy) "API password" else "API token") },
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
+
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(checked = state.useLegacy, onCheckedChange = onUseLegacy)
-                Spacer(Modifier.height(8.dp))
+                Switch(checked = state.serverless, onCheckedChange = onServerless)
                 Text(
-                    "  Legacy auth (older Kimai)",
+                    "  Do not use server",
                     color = MaterialTheme.colorScheme.onBackground,
                 )
             }
-            if (state.useLegacy) {
+
+            if (state.serverless) {
+                LocalModeNotes(hadServer = state.hadServer)
+                state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                Button(
+                    onClick = onFinishLocal,
+                    enabled = !state.testing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (state.testing) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.height(20.dp),
+                        )
+                    } else {
+                        Text("Use this device only")
+                    }
+                }
+            } else {
                 OutlinedTextField(
-                    value = state.legacyUser,
-                    onValueChange = onLegacyUser,
-                    label = { Text("Username") },
+                    value = state.baseUrl,
+                    onValueChange = onUrl,
+                    label = { Text("Server URL") },
+                    placeholder = { Text("http://192.168.0.110:8000") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-            }
-            state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            Button(
-                onClick = onTest,
-                enabled = !state.testing && state.baseUrl.isNotBlank() && state.token.isNotBlank(),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                if (state.testing) {
-                    CircularProgressIndicator(
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.height(20.dp),
+                OutlinedTextField(
+                    value = state.token,
+                    onValueChange = onToken,
+                    label = { Text(if (state.useLegacy) "API password" else "API token") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(checked = state.useLegacy, onCheckedChange = onUseLegacy)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "  Legacy auth (older Kimai)",
+                        color = MaterialTheme.colorScheme.onBackground,
                     )
-                } else {
-                    Text("Connect")
+                }
+                if (state.useLegacy) {
+                    OutlinedTextField(
+                        value = state.legacyUser,
+                        onValueChange = onLegacyUser,
+                        label = { Text("Username") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                Button(
+                    onClick = onTest,
+                    enabled = !state.testing && state.baseUrl.isNotBlank() &&
+                        state.token.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    if (state.testing) {
+                        CircularProgressIndicator(
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.height(20.dp),
+                        )
+                    } else {
+                        Text("Connect")
+                    }
                 }
             }
 
@@ -161,6 +193,47 @@ fun SetupScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text("Save & continue")
+            }
+        }
+    }
+}
+
+/**
+ * What running without a server actually means. Stated before the choice is
+ * made, because two of these are one-way: the data has nowhere else to exist,
+ * and it never joins a server added later.
+ */
+@Composable
+private fun LocalModeNotes(hadServer: Boolean) {
+    val notes = listOfNotNull(
+        if (hadServer) {
+            "The app stops contacting your server. It carries on the way it does " +
+                "when the server can't be reached — what it already has stays " +
+                "visible — except it no longer even tries."
+        } else null,
+        "Everything you record is kept in this app's storage on this phone. " +
+            "It is not uploaded and not backed up anywhere: clearing the app's " +
+            "data, or losing the phone, takes the history with it.",
+        "There is no size limit — the history keeps growing for as long as you keep it.",
+        "Setting up a server later starts the app over on the server's data. " +
+            "Nothing local is ever pushed to it; local data stays on the device, " +
+            "out of the way, unless you come back to this mode.",
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        notes.forEach { note ->
+            Row {
+                Text("•  ", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                Text(
+                    note,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+                    fontSize = 13.sp,
+                )
             }
         }
     }
