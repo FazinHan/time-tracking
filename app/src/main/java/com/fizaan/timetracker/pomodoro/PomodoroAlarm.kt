@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer.pomodoro
+package com.fizaan.timetracker.pomodoro
 
 import android.app.AlarmManager
 import android.app.Notification
@@ -16,9 +16,9 @@ import android.os.Handler
 import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import com.fizaan.kimaitimer.MainActivity
-import com.fizaan.kimaitimer.R
-import com.fizaan.kimaitimer.data.Prefs
+import com.fizaan.timetracker.MainActivity
+import com.fizaan.timetracker.R
+import com.fizaan.timetracker.data.Prefs
 
 // A channel's sound can't be changed once created, so silencing it needed a new
 // id; the original is deleted on first run.
@@ -30,7 +30,7 @@ const val ALERT_NOTIFICATION_ID = 1002
 const val EXTRA_POMODORO_PHASE = "pomodoro_phase"
 
 private const val ALARM_REQUEST = 7301
-private const val ACTION_PHASE_END = "com.fizaan.kimaitimer.POMODORO_PHASE"
+private const val ACTION_PHASE_END = "com.fizaan.timetracker.POMODORO_PHASE"
 
 /**
  * Wakes the phone at every work/break boundary.

@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer
+package com.fizaan.timetracker
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,8 +8,8 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import com.fizaan.kimaitimer.data.TimesheetActive
-import com.fizaan.kimaitimer.util.parseKimaiMillis
+import com.fizaan.timetracker.data.TimesheetActive
+import com.fizaan.timetracker.util.parseKimaiMillis
 
 private const val CHANNEL_ID = "running-timer"
 private const val NOTIFICATION_ID = 1001

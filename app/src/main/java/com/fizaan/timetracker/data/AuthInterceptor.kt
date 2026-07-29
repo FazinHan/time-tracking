@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer.data
+package com.fizaan.timetracker.data
 
 import okhttp3.Interceptor
 import okhttp3.Response

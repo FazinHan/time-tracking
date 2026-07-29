@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer
+package com.fizaan.timetracker
 
 import android.Manifest
 import android.app.NotificationManager
@@ -33,20 +33,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.fizaan.kimaitimer.pomodoro.EXTRA_POMODORO_PHASE
-import com.fizaan.kimaitimer.pomodoro.Phase
-import com.fizaan.kimaitimer.pomodoro.PomodoroAlert
-import com.fizaan.kimaitimer.ui.CalendarScreen
-import com.fizaan.kimaitimer.ui.KimaiTimerTheme
-import com.fizaan.kimaitimer.ui.MainScreen
-import com.fizaan.kimaitimer.ui.PomodoroScreen
-import com.fizaan.kimaitimer.ui.SetupScreen
-import com.fizaan.kimaitimer.ui.SheetScreen
-import com.fizaan.kimaitimer.ui.ToolsScreen
-import com.fizaan.kimaitimer.ui.VizScreen
+import com.fizaan.timetracker.pomodoro.EXTRA_POMODORO_PHASE
+import com.fizaan.timetracker.pomodoro.Phase
+import com.fizaan.timetracker.pomodoro.PomodoroAlert
+import com.fizaan.timetracker.ui.CalendarScreen
+import com.fizaan.timetracker.ui.TimeTrackerTheme
+import com.fizaan.timetracker.ui.MainScreen
+import com.fizaan.timetracker.ui.PomodoroScreen
+import com.fizaan.timetracker.ui.SetupScreen
+import com.fizaan.timetracker.ui.SheetScreen
+import com.fizaan.timetracker.ui.ToolsScreen
+import com.fizaan.timetracker.ui.VizScreen
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
@@ -114,9 +115,11 @@ class MainActivity : ComponentActivity() {
         PomodoroAlert.ensureChannel(this)
         applyAlertIntent(intent)
         setContent {
-            KimaiTimerTheme {
-                val vm: MainViewModel = viewModel()
-                val ui by vm.ui.collectAsState()
+            val vm: MainViewModel = viewModel()
+            val ui by vm.ui.collectAsState()
+            // The accent is read before anything is drawn, so a repaint is a
+            // recomposition rather than a restart.
+            TimeTrackerTheme(accent = Color(ui.accent)) {
                 val setup by vm.setup.collectAsState()
                 val viz by vm.viz.collectAsState()
                 val sheet by vm.sheet.collectAsState()
@@ -147,6 +150,8 @@ class MainActivity : ComponentActivity() {
                         onSelectCustomer = vm::onSelectCustomer,
                         onSelectProject = vm::onSelectProject,
                         onFinish = vm::finishSetup,
+                        accent = ui.accent,
+                        onAccent = vm::setAccent,
                     )
                 } else {
                     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -169,7 +174,7 @@ class MainActivity : ComponentActivity() {
                         drawerContent = {
                             ModalDrawerSheet {
                                 Text(
-                                    "Kimai Timer",
+                                    "Time Tracker",
                                     modifier = Modifier.padding(16.dp),
                                 )
                                 dests.forEach { d ->

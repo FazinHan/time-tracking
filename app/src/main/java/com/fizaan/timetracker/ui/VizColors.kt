@@ -1,7 +1,7 @@
-package com.fizaan.kimaitimer.ui
+package com.fizaan.timetracker.ui
 
 import androidx.compose.ui.graphics.Color
-import com.fizaan.kimaitimer.data.Activity
+import com.fizaan.timetracker.data.Activity
 
 /**
  * Fallback categorical palette for activities with no server-side color,

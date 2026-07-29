@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.KimaiTimer" parent="android:Theme.Material.NoActionBar">
-        <item name="android:statusBarColor">@color/kimai_bg</item>
-        <item name="android:navigationBarColor">@color/kimai_bg</item>
-        <item name="android:windowBackground">@color/kimai_bg</item>
+    <!-- Only what is needed before Compose takes over: the window background,
+         so the launch frame is the app's black rather than a white flash.
+         Status- and navigation-bar colours are no-ops from targetSdk 35 on;
+         the bars are drawn through edge-to-edge instead. -->
+    <style name="Theme.TimeTracker" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/app_background</item>
     </style>
 </resources>

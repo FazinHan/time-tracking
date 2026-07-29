@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer.ui
+package com.fizaan.timetracker.ui
 
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -60,8 +60,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fizaan.kimaitimer.UiState
-import com.fizaan.kimaitimer.data.TimesheetActive
+import com.fizaan.timetracker.UiState
+import com.fizaan.timetracker.data.TimesheetActive
 import kotlinx.coroutines.delay
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -109,7 +109,7 @@ fun MainScreen(
             }
             Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
                 Text(
-                    text = state.projectName.ifBlank { "Kimai Timer" },
+                    text = state.projectName.ifBlank { "Time Tracker" },
                     color = MaterialTheme.colorScheme.onBackground,
                     fontSize = 18.sp,
                 )
@@ -118,7 +118,7 @@ fun MainScreen(
                         .joinToString(" + ") { it.activity?.name ?: "activity" }
                     Text(
                         text = "Tracking: $names",
-                        color = KimaiRed,
+                        color = StopRed,
                         fontSize = 13.sp,
                     )
                 }
@@ -140,7 +140,7 @@ fun MainScreen(
             verticalArrangement = Arrangement.Center,
         ) {
             if (running) {
-                ElapsedTimer(beginIso = state.running?.begin, color = KimaiRed)
+                ElapsedTimer(beginIso = state.running?.begin, color = StopRed)
                 Spacer(Modifier.height(24.dp))
             }
             BigButton(
@@ -160,7 +160,7 @@ fun MainScreen(
                 Spacer(Modifier.height(18.dp))
                 Text(
                     text = "+ Start another activity",
-                    color = KimaiGreen,
+                    color = MaterialTheme.colorScheme.primary,
                     fontSize = 16.sp,
                     modifier = Modifier
                         .clickable(enabled = !state.busy) { onStartTap() }
@@ -181,7 +181,7 @@ fun MainScreen(
             ) {
                 Box(
                     modifier = Modifier
-                        .background(KimaiRed, CircleShape)
+                        .background(StopRed, CircleShape)
                         .clickable { onClearError() }
                         .padding(horizontal = 20.dp, vertical = 12.dp),
                 ) {
@@ -245,7 +245,7 @@ private fun SecondTimer(item: TimesheetActive) {
             color = MaterialTheme.colorScheme.onBackground,
             fontSize = 16.sp,
         )
-        ElapsedTimer(beginIso = item.begin, color = KimaiRed, fontSize = 26.sp)
+        ElapsedTimer(beginIso = item.begin, color = StopRed, fontSize = 26.sp)
     }
 }
 
@@ -290,7 +290,7 @@ internal fun BigButton(
     running: Boolean,
     busy: Boolean,
     onClick: () -> Unit,
-    accent: Color = KimaiRed,
+    accent: Color = StopRed,
     pulse: Boolean = true,
 ) {
     val animate = running && pulse
@@ -334,18 +334,20 @@ internal fun BigButton(
                 }
             }
         } else {
-            // Solid green play button
+            // Solid play button, filled with the theme colour. The glyph takes
+            // whatever reads on it, so a bright accent doesn't swallow it.
             Box(
                 modifier = Modifier
                     .size(size)
-                    .background(KimaiGreen, CircleShape)
+                    .background(MaterialTheme.colorScheme.primary, CircleShape)
                     .clickable(enabled = !busy) { onClick() },
                 contentAlignment = Alignment.Center,
             ) {
+                val onIt = MaterialTheme.colorScheme.onPrimary
                 if (busy) {
-                    CircularProgressIndicator(color = Color.White)
+                    CircularProgressIndicator(color = onIt)
                 } else {
-                    Icon(Icons.Filled.PlayArrow, "Start", tint = Color.White, modifier = Modifier.size(110.dp))
+                    Icon(Icons.Filled.PlayArrow, "Start", tint = onIt, modifier = Modifier.size(110.dp))
                 }
             }
         }
@@ -511,7 +513,7 @@ private fun RecentRow(item: TimesheetActive, onClick: () -> Unit, onLongClick: (
             Text(
                 text = tags.joinToString(" · "),
                 fontSize = 12.sp,
-                color = KimaiGreen,
+                color = MaterialTheme.colorScheme.primary,
             )
         }
     }
@@ -560,7 +562,7 @@ private fun TagPickerDialog(
                                 imageVector = if (isSel) Icons.Filled.CheckBox
                                 else Icons.Filled.CheckBoxOutlineBlank,
                                 contentDescription = null,
-                                tint = if (isSel) KimaiGreen
+                                tint = if (isSel) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                             )
                             Spacer(Modifier.size(12.dp))

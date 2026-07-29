@@ -1,7 +1,7 @@
-package com.fizaan.kimaitimer.data
+package com.fizaan.timetracker.data
 
 import android.content.Context
-import com.fizaan.kimaitimer.util.parseKimaiMillis
+import com.fizaan.timetracker.util.parseKimaiMillis
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers

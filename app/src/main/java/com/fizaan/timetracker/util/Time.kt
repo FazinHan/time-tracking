@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer.util
+package com.fizaan.timetracker.util
 
 import java.time.LocalDate
 import java.time.LocalDateTime

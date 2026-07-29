@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer.ui
+package com.fizaan.timetracker.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -44,13 +44,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fizaan.kimaitimer.BatchAction
-import com.fizaan.kimaitimer.ToolsState
-import com.fizaan.kimaitimer.UNTAGGED
-import com.fizaan.kimaitimer.data.Activity
-import com.fizaan.kimaitimer.util.entrySeconds
-import com.fizaan.kimaitimer.util.formatDuration
-import com.fizaan.kimaitimer.util.parseKimaiLocal
+import com.fizaan.timetracker.BatchAction
+import com.fizaan.timetracker.ToolsState
+import com.fizaan.timetracker.UNTAGGED
+import com.fizaan.timetracker.data.Activity
+import com.fizaan.timetracker.util.entrySeconds
+import com.fizaan.timetracker.util.formatDuration
+import com.fizaan.timetracker.util.parseKimaiLocal
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -142,7 +142,7 @@ fun BatchTool(
 
         b.done?.let {
             Spacer(Modifier.height(16.dp))
-            Text(it, color = KimaiGreen, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(it, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
 
         b.progress?.let {
@@ -358,7 +358,7 @@ private fun ActionPanel(
         enabled = !busy,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Text("Delete all ${b.matches.size}", color = KimaiRed)
+        Text("Delete all ${b.matches.size}", color = StopRed)
     }
 }
 
@@ -433,7 +433,7 @@ private fun ConfirmDialog(
                         action == BatchAction.RENAME_ACTIVITY -> "Rename"
                         else -> "Apply"
                     },
-                    color = if (action == BatchAction.DELETE) KimaiRed
+                    color = if (action == BatchAction.DELETE) StopRed
                     else MaterialTheme.colorScheme.onSurface,
                 )
             }

@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer.ui
+package com.fizaan.timetracker.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
@@ -70,15 +70,15 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fizaan.kimaitimer.SheetPeriod
-import com.fizaan.kimaitimer.SheetState
-import com.fizaan.kimaitimer.UNTAGGED
-import com.fizaan.kimaitimer.data.Activity
-import com.fizaan.kimaitimer.data.TimesheetEntry
-import com.fizaan.kimaitimer.util.entrySeconds
-import com.fizaan.kimaitimer.util.formatDuration
-import com.fizaan.kimaitimer.util.formatKimai
-import com.fizaan.kimaitimer.util.parseKimaiLocal
+import com.fizaan.timetracker.SheetPeriod
+import com.fizaan.timetracker.SheetState
+import com.fizaan.timetracker.UNTAGGED
+import com.fizaan.timetracker.data.Activity
+import com.fizaan.timetracker.data.TimesheetEntry
+import com.fizaan.timetracker.util.entrySeconds
+import com.fizaan.timetracker.util.formatDuration
+import com.fizaan.timetracker.util.formatKimai
+import com.fizaan.timetracker.util.parseKimaiLocal
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -173,7 +173,7 @@ fun SheetScreen(
                         Text(
                             text = date.format(dayFmt),
                             fontSize = 13.sp,
-                            color = KimaiGreen,
+                            color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(top = 16.dp, bottom = 6.dp),
                         )
                     }
@@ -197,7 +197,7 @@ fun SheetScreen(
             if (state.loading) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center),
-                    color = KimaiGreen,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             state.error?.let { err ->
@@ -205,7 +205,7 @@ fun SheetScreen(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(16.dp)
-                        .background(KimaiRed, CircleShape)
+                        .background(StopRed, CircleShape)
                         .clickable { onClearError() }
                         .padding(horizontal = 20.dp, vertical = 12.dp),
                 ) {
@@ -443,7 +443,7 @@ private fun SwipeToDeleteRow(
                 modifier = Modifier
                     .width(DeleteActionWidth)
                     .fillMaxHeight()
-                    .background(KimaiRed, RoundedCornerShape(8.dp))
+                    .background(StopRed, RoundedCornerShape(8.dp))
                     .clickable(enabled = revealed) { onDelete() },
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
@@ -519,7 +519,7 @@ private fun EntryRow(
                 Text(
                     text = tags.joinToString(" · "),
                     fontSize = 11.sp,
-                    color = KimaiGreen,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             if (!entry.description.isNullOrBlank()) {
@@ -545,7 +545,7 @@ private fun EntryRow(
                 text = if (entry.end == null) "${formatDuration(secs)} · running"
                 else formatDuration(secs),
                 fontSize = 12.sp,
-                color = if (entry.end == null) KimaiRed
+                color = if (entry.end == null) StopRed
                 else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
             )
         }
@@ -589,7 +589,7 @@ private fun DeleteConfirmDialog(
         },
         confirmButton = {
             OutlinedButton(enabled = !deleting, onClick = onConfirm) {
-                Text(if (deleting) "Deleting…" else "Delete", color = KimaiRed)
+                Text(if (deleting) "Deleting…" else "Delete", color = StopRed)
             }
         },
         dismissButton = {

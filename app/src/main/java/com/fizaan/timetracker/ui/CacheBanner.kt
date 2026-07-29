@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer.ui
+package com.fizaan.timetracker.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
@@ -21,7 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fizaan.kimaitimer.CacheInfo
+import com.fizaan.timetracker.CacheInfo
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId

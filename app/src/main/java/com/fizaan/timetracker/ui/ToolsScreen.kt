@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer.ui
+package com.fizaan.timetracker.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -47,12 +47,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fizaan.kimaitimer.BatchAction
-import com.fizaan.kimaitimer.CacheInfo
-import com.fizaan.kimaitimer.FreqResult
-import com.fizaan.kimaitimer.ToolsState
-import com.fizaan.kimaitimer.data.CACHE_MAX_BYTES
-import com.fizaan.kimaitimer.util.formatDuration
+import com.fizaan.timetracker.BatchAction
+import com.fizaan.timetracker.CacheInfo
+import com.fizaan.timetracker.FreqResult
+import com.fizaan.timetracker.ToolsState
+import com.fizaan.timetracker.data.CACHE_MAX_BYTES
+import com.fizaan.timetracker.util.formatDuration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -153,7 +153,7 @@ fun ToolsScreen(
             if (state.loading || state.computing) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center),
-                    color = KimaiGreen,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             state.error?.let { err ->
@@ -161,7 +161,7 @@ fun ToolsScreen(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(16.dp)
-                        .background(KimaiRed, CircleShape)
+                        .background(StopRed, CircleShape)
                         .clickable { onClearError() }
                         .padding(horizontal = 20.dp, vertical = 12.dp),
                 ) {
@@ -230,7 +230,7 @@ private fun ToolCard(
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, tint = KimaiGreen)
+        Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(title, fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
@@ -405,7 +405,7 @@ private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
                     formatDuration(yearlySeconds),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
-                    color = KimaiGreen,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             Text(

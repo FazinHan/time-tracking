@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer.ui
+package com.fizaan.timetracker.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -45,13 +45,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fizaan.kimaitimer.PomodoroState
-import com.fizaan.kimaitimer.pomodoro.Phase
-import com.fizaan.kimaitimer.pomodoro.PomodoroAlert
-import com.fizaan.kimaitimer.pomodoro.PomodoroSettings
-import com.fizaan.kimaitimer.pomodoro.formatRemaining
-import com.fizaan.kimaitimer.pomodoro.isBreak
-import com.fizaan.kimaitimer.pomodoro.phaseAt
+import com.fizaan.timetracker.PomodoroState
+import com.fizaan.timetracker.pomodoro.Phase
+import com.fizaan.timetracker.pomodoro.PomodoroAlert
+import com.fizaan.timetracker.pomodoro.PomodoroSettings
+import com.fizaan.timetracker.pomodoro.formatRemaining
+import com.fizaan.timetracker.pomodoro.isBreak
+import com.fizaan.timetracker.pomodoro.phaseAt
 import kotlinx.coroutines.delay
 
 /** The one colour a work period is allowed: a flat grey on the same black. */
@@ -107,7 +107,7 @@ fun PomodoroScreen(
     }
 
     val onBreak = slot?.kind?.isBreak == true
-    val accent = if (onBreak) KimaiRed else PomodoroGrey
+    val accent = if (onBreak) StopRed else PomodoroGrey
 
     Box(
         modifier = Modifier
@@ -200,7 +200,7 @@ fun PomodoroScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(16.dp)
-                    .background(KimaiRed, CircleShape)
+                    .background(StopRed, CircleShape)
                     .clickable { onClearError() }
                     .padding(horizontal = 20.dp, vertical = 12.dp),
             ) {

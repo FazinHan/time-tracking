@@ -1,11 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Kimai / Tabler palette -->
-    <color name="kimai_primary">#FF206BC4</color>
-    <color name="kimai_red">#FFD63939</color>
-    <color name="kimai_green">#FF2FB344</color>
-    <color name="kimai_bg">#FF141414</color>
-    <color name="kimai_surface">#FF232323</color>
+    <!-- Only the window background lives here; every other colour is themed at
+         runtime from the accent the user picked (see ui/Theme.kt). -->
+    <color name="app_background">#FF141414</color>
     <color name="white">#FFFFFFFF</color>
     <color name="black">#FF000000</color>
 </resources>

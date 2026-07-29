@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer.pomodoro
+package com.fizaan.timetracker.pomodoro
 
 /**
  * The pomodoro schedule.

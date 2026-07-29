@@ -1,33 +1,35 @@
-package com.fizaan.kimaitimer
+package com.fizaan.timetracker
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.fizaan.kimaitimer.data.Activity
-import com.fizaan.kimaitimer.data.ActivityColorUpdate
-import com.fizaan.kimaitimer.data.ActivityCreate
-import com.fizaan.kimaitimer.data.ActivityNameUpdate
-import com.fizaan.kimaitimer.data.ApiProvider
-import com.fizaan.kimaitimer.data.CacheSnapshot
-import com.fizaan.kimaitimer.data.Customer
-import com.fizaan.kimaitimer.data.Prefs
-import com.fizaan.kimaitimer.data.Project
-import com.fizaan.kimaitimer.data.TimesheetActive
-import com.fizaan.kimaitimer.data.TimesheetCache
-import com.fizaan.kimaitimer.data.TimesheetCreate
-import com.fizaan.kimaitimer.data.TimesheetEntry
-import com.fizaan.kimaitimer.data.TimesheetUpdate
+import com.fizaan.timetracker.data.Activity
+import com.fizaan.timetracker.data.ActivityColorUpdate
+import com.fizaan.timetracker.data.ActivityCreate
+import com.fizaan.timetracker.data.ActivityNameUpdate
+import com.fizaan.timetracker.data.ApiProvider
+import com.fizaan.timetracker.data.CacheSnapshot
+import com.fizaan.timetracker.data.Customer
+import com.fizaan.timetracker.data.Prefs
+import com.fizaan.timetracker.data.Project
+import com.fizaan.timetracker.data.TimesheetActive
+import com.fizaan.timetracker.data.TimesheetCache
+import com.fizaan.timetracker.data.TimesheetCreate
+import com.fizaan.timetracker.data.TimesheetEntry
+import com.fizaan.timetracker.data.TimesheetUpdate
 import androidx.core.app.NotificationManagerCompat
-import com.fizaan.kimaitimer.pomodoro.ALERT_NOTIFICATION_ID
-import com.fizaan.kimaitimer.pomodoro.Phase
-import com.fizaan.kimaitimer.pomodoro.PomodoroAlarm
-import com.fizaan.kimaitimer.pomodoro.PomodoroSettings
-import com.fizaan.kimaitimer.pomodoro.sessionSummary
-import com.fizaan.kimaitimer.util.entryLocalDate
-import com.fizaan.kimaitimer.util.entrySeconds
-import com.fizaan.kimaitimer.util.formatKimai
-import com.fizaan.kimaitimer.util.parseKimaiLocal
-import com.fizaan.kimaitimer.util.parseKimaiMillis
+import com.fizaan.timetracker.pomodoro.ALERT_NOTIFICATION_ID
+import com.fizaan.timetracker.pomodoro.Phase
+import com.fizaan.timetracker.pomodoro.PomodoroAlarm
+import com.fizaan.timetracker.pomodoro.PomodoroSettings
+import com.fizaan.timetracker.pomodoro.sessionSummary
+import androidx.compose.ui.graphics.toArgb
+import com.fizaan.timetracker.ui.DefaultAccent
+import com.fizaan.timetracker.util.entryLocalDate
+import com.fizaan.timetracker.util.entrySeconds
+import com.fizaan.timetracker.util.formatKimai
+import com.fizaan.timetracker.util.parseKimaiLocal
+import com.fizaan.timetracker.util.parseKimaiMillis
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -225,6 +227,8 @@ data class PomodoroState(
 /** Whole-app UI state. */
 data class UiState(
     val configured: Boolean = false,
+    /** Packed ARGB the whole theme is built from; chosen in setup. */
+    val accent: Int = DefaultAccent.toArgb(),
     val screen: AppScreen = AppScreen.TIMER,
     val loading: Boolean = false,
     val busy: Boolean = false,          // an action (start/stop/create) is in flight
@@ -300,10 +304,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val pomodoro: StateFlow<PomodoroState> = _pomodoro.asStateFlow()
 
     init {
+        _ui.value = _ui.value.copy(accent = prefs.accentColor)
         if (prefs.isConfigured) {
             _ui.value = _ui.value.copy(configured = true, projectName = prefs.projectName)
             refresh()
         }
+    }
+
+    /** Repaint the app. Takes effect on the next frame; nothing is reloaded. */
+    fun setAccent(argb: Int) {
+        prefs.accentColor = argb
+        _ui.value = _ui.value.copy(accent = argb)
     }
 
     private fun defaultUrlHint(): String =

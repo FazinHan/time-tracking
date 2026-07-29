@@ -1,37 +1,93 @@
-package com.fizaan.kimaitimer.ui
+package com.fizaan.timetracker.ui
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 
-// Kimai / Tabler palette
-val KimaiPrimary = Color(0xFF206BC4)
-val KimaiRed = Color(0xFFD63939)
-val KimaiGreen = Color(0xFF2FB344)
-val KimaiBg = Color(0xFF141414)      // really dark grey
-val KimaiSurface = Color(0xFF232323) // dark grey surface (dialogs)
+// The app is dark whatever the system says: a near-black ground with a single
+// accent colour on top of it. Only the accent is the user's to choose.
+val AppBg = Color(0xFF141414)      // really dark grey
+val AppSurface = Color(0xFF232323) // dark grey surface (dialogs, cards)
+val AppOn = Color(0xFFE7ECF3)
+private val AppSurfaceVariant = Color(0xFF2E2E2E)
+private val AppOutline = Color(0xFF6C6C6C)
 
-private val DarkColors = darkColorScheme(
-    primary = KimaiGreen,
-    onPrimary = Color.White,
-    background = KimaiBg,
-    onBackground = Color(0xFFE7ECF3),
-    surface = KimaiSurface,
-    onSurface = Color(0xFFE7ECF3),
-    error = KimaiRed,
-)
+/**
+ * The stop signal. Deliberately not themed: a running timer and its stop button
+ * have to read the same whatever accent is set, and red is the one colour that
+ * says "this is live" on sight.
+ */
+val StopRed = Color(0xFFD63939)
 
-private val LightColors = lightColorScheme(
-    primary = KimaiPrimary,
-    onPrimary = Color.White,
-    error = KimaiRed,
+/** The offered accents. Anything else is mixed by hand in the RGB picker. */
+enum class Accent(val label: String, val color: Color) {
+    GREEN("Green", Color(0xFF2FB344)),
+    RED("Red", Color(0xFFD63939)),
+    BLUE("Blue", Color(0xFF206BC4)),
+}
+
+val DefaultAccent: Color = Accent.GREEN.color
+
+/**
+ * How far apart two colours are, as a WCAG contrast ratio: 1.0 is invisible,
+ * 21.0 is black on white.
+ */
+fun contrastRatio(a: Color, b: Color): Float {
+    val hi = maxOf(a.luminance(), b.luminance())
+    val lo = minOf(a.luminance(), b.luminance())
+    return (hi + 0.05f) / (lo + 0.05f)
+}
+
+/**
+ * The accent is drawn on both grounds, so the worse of the two decides whether
+ * it can be read at all. [AppSurface] is the lighter and therefore binding for
+ * anything bright; [AppBg] catches accents so dark they disappear into it.
+ */
+fun accentContrast(accent: Color): Float =
+    minOf(contrastRatio(accent, AppBg), contrastRatio(accent, AppSurface))
+
+/** WCAG AA for large text and UI components. Below this an accent is refused. */
+const val MinAccentContrast = 3f
+
+fun accentUsable(accent: Color): Boolean = accentContrast(accent) >= MinAccentContrast
+
+/** Text and icons drawn *on* the accent — black once the accent is bright. */
+fun onAccent(accent: Color): Color =
+    if (accent.luminance() > 0.5f) Color.Black else Color.White
+
+private fun mix(a: Color, b: Color, t: Float) = Color(
+    red = a.red + (b.red - a.red) * t,
+    green = a.green + (b.green - a.green) * t,
+    blue = a.blue + (b.blue - a.blue) * t,
 )
 
 @Composable
-fun KimaiTimerTheme(content: @Composable () -> Unit) {
-    val colors = if (isSystemInDarkTheme()) DarkColors else DarkColors // dark, Kimai-style, either way
+fun TimeTrackerTheme(accent: Color = DefaultAccent, content: @Composable () -> Unit) {
+    // The container roles are the accent muted into the surface, so the parts
+    // Material colours for us — a selected drawer row, a switch track — follow
+    // the choice too instead of falling back to Material's purple.
+    val container = mix(AppSurface, accent, 0.30f)
+    val colors = darkColorScheme(
+        primary = accent,
+        onPrimary = onAccent(accent),
+        primaryContainer = container,
+        onPrimaryContainer = AppOn,
+        secondary = accent,
+        onSecondary = onAccent(accent),
+        secondaryContainer = container,
+        onSecondaryContainer = AppOn,
+        tertiary = accent,
+        onTertiary = onAccent(accent),
+        background = AppBg,
+        onBackground = AppOn,
+        surface = AppSurface,
+        onSurface = AppOn,
+        surfaceVariant = AppSurfaceVariant,
+        onSurfaceVariant = AppOn,
+        outline = AppOutline,
+        error = StopRed,
+    )
     MaterialTheme(colorScheme = colors, content = content)
 }

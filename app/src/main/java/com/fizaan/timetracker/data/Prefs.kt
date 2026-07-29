@@ -1,11 +1,13 @@
-package com.fizaan.kimaitimer.data
+package com.fizaan.timetracker.data
 
 import android.content.Context
-import com.fizaan.kimaitimer.pomodoro.PomodoroSettings
+import androidx.compose.ui.graphics.toArgb
+import com.fizaan.timetracker.pomodoro.PomodoroSettings
+import com.fizaan.timetracker.ui.DefaultAccent
 
 /** Simple persisted settings for the single-user personal tracker. */
 class Prefs(context: Context) {
-    private val sp = context.getSharedPreferences("kimai_timer", Context.MODE_PRIVATE)
+    private val sp = context.getSharedPreferences("time_tracker", Context.MODE_PRIVATE)
 
     var baseUrl: String
         get() = sp.getString("base_url", "") ?: ""
@@ -39,6 +41,11 @@ class Prefs(context: Context) {
 
     val isConfigured: Boolean
         get() = baseUrl.isNotBlank() && token.isNotBlank() && projectId >= 0
+
+    /** Packed ARGB of the accent every themed element is drawn from. */
+    var accentColor: Int
+        get() = sp.getInt("accent_color", DefaultAccent.toArgb())
+        set(v) = sp.edit().putInt("accent_color", v).apply()
 
     // ---- Per-activity tag memory ----
     //

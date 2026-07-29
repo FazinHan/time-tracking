@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer.ui
+package com.fizaan.timetracker.ui
 
 import android.content.res.Configuration
 import androidx.compose.foundation.background
@@ -45,10 +45,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fizaan.kimaitimer.CalendarState
-import com.fizaan.kimaitimer.data.Activity
-import com.fizaan.kimaitimer.data.TimesheetEntry
-import com.fizaan.kimaitimer.util.parseKimaiLocal
+import com.fizaan.timetracker.CalendarState
+import com.fizaan.timetracker.data.Activity
+import com.fizaan.timetracker.data.TimesheetEntry
+import com.fizaan.timetracker.util.parseKimaiLocal
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -161,7 +161,7 @@ fun CalendarScreen(
                             .then(
                                 if (isToday) Modifier
                                     .width(26.dp).height(26.dp)
-                                    .background(KimaiGreen, CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary, CircleShape)
                                 else Modifier,
                             ),
                     ) {
@@ -182,7 +182,7 @@ fun CalendarScreen(
             if (state.loading) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center),
-                    color = KimaiGreen,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             state.error?.let { err ->
@@ -190,7 +190,7 @@ fun CalendarScreen(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(16.dp)
-                        .background(KimaiRed, CircleShape)
+                        .background(StopRed, CircleShape)
                         .clickable { onClearError() }
                         .padding(horizontal = 20.dp, vertical = 12.dp),
                 ) {

@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "KimaiTimer"
+rootProject.name = "TimeTracker"
 include(":app")

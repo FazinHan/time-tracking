@@ -1,4 +1,4 @@
-package com.fizaan.kimaitimer.ui
+package com.fizaan.timetracker.ui
 
 import android.content.res.Configuration
 import androidx.compose.foundation.Canvas
@@ -59,16 +59,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.fizaan.kimaitimer.PieMode
-import com.fizaan.kimaitimer.pieRange
-import com.fizaan.kimaitimer.VizPeriod
-import com.fizaan.kimaitimer.VizState
-import com.fizaan.kimaitimer.VizTab
-import com.fizaan.kimaitimer.data.Activity
-import com.fizaan.kimaitimer.data.TimesheetEntry
-import com.fizaan.kimaitimer.util.entryLocalDate
-import com.fizaan.kimaitimer.util.entrySeconds
-import com.fizaan.kimaitimer.util.formatDuration
+import com.fizaan.timetracker.PieMode
+import com.fizaan.timetracker.pieRange
+import com.fizaan.timetracker.VizPeriod
+import com.fizaan.timetracker.VizState
+import com.fizaan.timetracker.VizTab
+import com.fizaan.timetracker.data.Activity
+import com.fizaan.timetracker.data.TimesheetEntry
+import com.fizaan.timetracker.util.entryLocalDate
+import com.fizaan.timetracker.util.entrySeconds
+import com.fizaan.timetracker.util.formatDuration
 import kotlinx.coroutines.delay
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -168,7 +168,7 @@ fun VizScreen(
             if (state.loading) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center),
-                    color = KimaiGreen,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             state.error?.let { err ->
@@ -176,7 +176,7 @@ fun VizScreen(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(16.dp)
-                        .background(KimaiRed, CircleShape)
+                        .background(StopRed, CircleShape)
                         .padding(horizontal = 20.dp, vertical = 12.dp),
                 ) {
                     Text(err, color = Color.White, modifier = Modifier)

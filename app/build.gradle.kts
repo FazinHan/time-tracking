@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.fizaan.kimaitimer"
+    namespace = "com.fizaan.timetracker"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.fizaan.kimaitimer"
+        applicationId = "com.fizaan.timetracker"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
