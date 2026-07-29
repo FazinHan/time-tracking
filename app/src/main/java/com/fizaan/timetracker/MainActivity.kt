@@ -226,6 +226,7 @@ class MainActivity : ComponentActivity() {
                                 onPick = vm::startPomodoro,
                                 onDismissPicker = vm::dismissPomodoroPicker,
                                 onStop = vm::stopPomodoro,
+                                onSkip = vm::skipPomodoroPhase,
                                 onPhaseStarted = vm::onPomodoroPhaseStarted,
                                 onDismissAlert = vm::dismissPomodoroAlert,
                                 onClearError = vm::clearPomodoroError,

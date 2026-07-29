@@ -22,6 +22,7 @@ import com.fizaan.timetracker.pomodoro.ALERT_NOTIFICATION_ID
 import com.fizaan.timetracker.pomodoro.Phase
 import com.fizaan.timetracker.pomodoro.PomodoroAlarm
 import com.fizaan.timetracker.pomodoro.PomodoroSettings
+import com.fizaan.timetracker.pomodoro.phaseAt
 import com.fizaan.timetracker.pomodoro.sessionSummary
 import androidx.compose.ui.graphics.toArgb
 import com.fizaan.timetracker.ui.DefaultAccent
@@ -215,6 +216,8 @@ data class PomodoroState(
     val sessionSettings: PomodoroSettings = PomodoroSettings(),
     val activities: List<Activity> = emptyList(),   // only the productive-tagged ones
     val startMs: Long = 0L,
+    /** How far skips have pushed the schedule ahead of the clock. */
+    val skew: Long = 0L,
     val entryId: Int? = null,
     val activityName: String = "",
     val showPicker: Boolean = false,
@@ -222,6 +225,9 @@ data class PomodoroState(
     val alert: Phase? = null,                       // a boundary just passed
 ) {
     val running: Boolean get() = startMs > 0L && entryId != null
+
+    /** The instant the schedule runs from; the phase is read at this. */
+    val timelineOrigin: Long get() = startMs - skew
 }
 
 /** Whole-app UI state. */
@@ -297,6 +303,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             settings = prefs.pomodoroSettings,
             sessionSettings = prefs.pomodoroSessionSettings,
             startMs = prefs.pomodoroStartMs,
+            skew = prefs.pomodoroSkew,
             entryId = prefs.pomodoroEntryId.takeIf { it >= 0 },
             activityName = prefs.pomodoroActivityName,
         )
@@ -632,6 +639,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             settings = prefs.pomodoroSettings,
             sessionSettings = prefs.pomodoroSessionSettings,
             startMs = prefs.pomodoroStartMs,
+            skew = prefs.pomodoroSkew,
             entryId = prefs.pomodoroEntryId.takeIf { it >= 0 },
             activityName = prefs.pomodoroActivityName,
         )
@@ -691,6 +699,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * End the current period now and start the next one.
+     *
+     * The session's real start is untouched — that is what Kimai has — and the
+     * *schedule* is moved forward by the unused remainder instead, so the phase
+     * stays a pure function of an instant and a killed process still picks the
+     * session up exactly where it left it. What was skipped is kept so the
+     * description can report the periods at their true lengths.
+     */
+    fun skipPomodoroPhase() {
+        val s = _pomodoro.value
+        if (!s.running) return
+        val now = System.currentTimeMillis()
+        val slot = phaseAt(s.timelineOrigin, now, s.sessionSettings)
+        val remaining = (slot.endMs - now).coerceAtLeast(0L)
+        prefs.pomodoroSkips = prefs.pomodoroSkips + (slot.index to remaining)
+        prefs.pomodoroSkew = prefs.pomodoroSkew + remaining
+        _pomodoro.value = s.copy(skew = prefs.pomodoroSkew, alert = null)
+        // The next boundary just moved; nothing announces a skip, the user did it.
+        PomodoroAlarm.scheduleNext(ctx)
+        NotificationManagerCompat.from(ctx).cancel(ALERT_NOTIFICATION_ID)
+    }
+
+    /**
      * Begin a session: one Kimai entry that stays open across every work and
      * break period, plus the alarm for the first boundary.
      */
@@ -717,8 +748,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 prefs.pomodoroActivityName = name
                 prefs.pomodoroBeginIso = beginIso
                 prefs.pomodoroSessionSettings = _pomodoro.value.settings
+                prefs.pomodoroSkew = 0L
+                prefs.pomodoroSkips = emptyMap()
                 _pomodoro.value = _pomodoro.value.copy(
-                    busy = false, startMs = startMs, entryId = created.id,
+                    busy = false, startMs = startMs, skew = 0L, entryId = created.id,
                     sessionSettings = prefs.pomodoroSessionSettings,
                     activityName = name, alert = null,
                 )
@@ -745,8 +778,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _pomodoro.value = s.copy(busy = true, error = null)
         viewModelScope.launch {
             try {
-                val summary =
-                    sessionSummary(s.startMs, System.currentTimeMillis(), s.sessionSettings)
+                val summary = sessionSummary(
+                    s.startMs, System.currentTimeMillis(), s.sessionSettings, prefs.pomodoroSkips,
+                )
                 api().updateTimesheet(
                     entryId,
                     TimesheetUpdate(
@@ -770,7 +804,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         PomodoroAlarm.cancel(ctx)
         prefs.clearPomodoroSession()
         _pomodoro.value = _pomodoro.value.copy(
-            startMs = 0L, entryId = null, activityName = "", alert = null,
+            startMs = 0L, skew = 0L, entryId = null, activityName = "", alert = null,
         )
     }
 

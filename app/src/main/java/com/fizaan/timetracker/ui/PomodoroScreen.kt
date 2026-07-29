@@ -1,6 +1,7 @@
 package com.fizaan.timetracker.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -78,6 +80,7 @@ fun PomodoroScreen(
     onPick: (Int) -> Unit,
     onDismissPicker: () -> Unit,
     onStop: () -> Unit,
+    onSkip: () -> Unit,
     onPhaseStarted: (Phase) -> Unit,
     onDismissAlert: () -> Unit,
     onClearError: () -> Unit,
@@ -91,18 +94,22 @@ fun PomodoroScreen(
         }
     }
 
-    val slot = remember(now, state.startMs, state.sessionSettings) {
-        if (state.running) phaseAt(state.startMs, now, state.sessionSettings) else null
+    val slot = remember(now, state.timelineOrigin, state.sessionSettings) {
+        if (state.running) phaseAt(state.timelineOrigin, now, state.sessionSettings) else null
     }
     // A phase that turned over while this screen was watching is announced here;
     // one that turned over while the app was away was announced by the alarm, so
-    // only a boundary in the last minute is worth interrupting for.
+    // only a boundary in the last minute is worth interrupting for. A skip is
+    // excluded: it moves the schedule deliberately, and the user is right here.
     var lastIndex by remember(state.startMs) { mutableIntStateOf(slot?.index ?: -1) }
+    var lastSkew by remember(state.startMs) { mutableLongStateOf(state.skew) }
     LaunchedEffect(slot?.index) {
         val s = slot ?: return@LaunchedEffect
         if (s.index != lastIndex) {
+            val skipped = state.skew != lastSkew
             lastIndex = s.index
-            if (now - s.startMs < 60_000) onPhaseStarted(s.kind)
+            lastSkew = state.skew
+            if (!skipped && now - s.startMs < 60_000) onPhaseStarted(s.kind)
         }
     }
 
@@ -115,8 +122,19 @@ fun PomodoroScreen(
             .background(MaterialTheme.colorScheme.background)
             .systemBarsPadding(),
     ) {
-        // While a session runs there is nothing up here — not the drawer, not
-        // the settings — by design.
+        // While a session runs the only thing up here is the way out of the
+        // current period — not the drawer, not the settings — by design.
+        if (slot != null) {
+            SkipPill(
+                label = if (slot.kind.isBreak) "Skip to work" else "Skip to break",
+                accent = accent,
+                enabled = !state.busy,
+                onClick = onSkip,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+            )
+        }
         if (!state.running) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
@@ -379,5 +397,30 @@ private fun Stepper(label: String, value: String, onMinus: () -> Unit, onPlus: (
         IconButton(onClick = onPlus) {
             Icon(Icons.Filled.Add, "More $label", tint = MaterialTheme.colorScheme.onSurface)
         }
+    }
+}
+
+/**
+ * The only control a running session offers besides stopping: end this period
+ * now and begin the next. Outlined in whatever colour the phase is already
+ * using, so a work period stays the single flat grey it is meant to be.
+ */
+@Composable
+private fun SkipPill(
+    label: String,
+    accent: Color,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tint = if (enabled) accent else accent.copy(alpha = 0.4f)
+    Box(
+        modifier = modifier
+            .clip(CircleShape)
+            .border(1.dp, tint, CircleShape)
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 18.dp, vertical = 9.dp),
+    ) {
+        Text(label, color = tint, fontSize = 14.sp)
     }
 }

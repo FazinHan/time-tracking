@@ -5,6 +5,7 @@ import androidx.compose.ui.graphics.toArgb
 import com.fizaan.timetracker.DefaultIconVariant
 import com.fizaan.timetracker.IconVariant
 import com.fizaan.timetracker.pomodoro.PomodoroSettings
+import com.fizaan.timetracker.pomodoro.PomodoroSkips
 import com.fizaan.timetracker.ui.DefaultAccent
 
 /** Simple persisted settings for the single-user personal tracker. */
@@ -132,6 +133,34 @@ class Prefs(context: Context) {
         get() = sp.getString("pomo_activity_name", "") ?: ""
         set(v) = sp.edit().putString("pomo_activity_name", v).apply()
 
+    /**
+     * How far the schedule has been pushed ahead of the clock by skips. The
+     * phase is read at `pomodoroTimelineOrigin`, so skipping is arithmetic on
+     * one number and survives the process being killed like everything else.
+     */
+    var pomodoroSkew: Long
+        get() = sp.getLong("pomo_skew", 0L)
+        set(v) = sp.edit().putLong("pomo_skew", v).apply()
+
+    /** The instant the *schedule* runs from — the start, less everything skipped. */
+    val pomodoroTimelineOrigin: Long
+        get() = pomodoroStartMs - pomodoroSkew
+
+    /** Period index → time skipped off it, as "index:millis" pairs. */
+    var pomodoroSkips: PomodoroSkips
+        get() = (sp.getString("pomo_skips", "") ?: "")
+            .split(',')
+            .mapNotNull { pair ->
+                val (i, ms) = pair.split(':').takeIf { it.size == 2 } ?: return@mapNotNull null
+                val index = i.toIntOrNull() ?: return@mapNotNull null
+                val millis = ms.toLongOrNull() ?: return@mapNotNull null
+                index to millis
+            }
+            .toMap()
+        set(v) = sp.edit()
+            .putString("pomo_skips", v.entries.joinToString(",") { "${it.key}:${it.value}" })
+            .apply()
+
     /** The entry's begin exactly as sent to Kimai; PATCHes have to echo it. */
     var pomodoroBeginIso: String
         get() = sp.getString("pomo_begin_iso", "") ?: ""
@@ -140,6 +169,7 @@ class Prefs(context: Context) {
     fun clearPomodoroSession() = sp.edit()
         .remove("pomo_start").remove("pomo_entry").remove("pomo_activity")
         .remove("pomo_activity_name").remove("pomo_begin_iso")
+        .remove("pomo_skew").remove("pomo_skips")
         .remove("pomo_run_work").remove("pomo_run_break")
         .remove("pomo_run_long").remove("pomo_run_cycle")
         .apply()

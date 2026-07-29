@@ -58,7 +58,17 @@ fun Phase.lengthMs(s: PomodoroSettings): Long = when (this) {
     Phase.LONG_BREAK -> s.longBreakMinutes
 } * 60_000L
 
-/** The period covering [nowMs] in a session that began at [startMs]. */
+/**
+ * How much of each period was cut off by tapping skip, keyed by period index.
+ *
+ * A skip doesn't move the session's real start — that is what the Kimai entry
+ * is stamped with — it moves the *schedule* forward by the unused remainder, so
+ * the phase stays a pure function of an instant and still self-corrects after
+ * the app has been away. These are the amounts by which the two have parted.
+ */
+typealias PomodoroSkips = Map<Int, Long>
+
+/** The period covering [nowMs] in a session whose schedule began at [startMs]. */
 fun phaseAt(startMs: Long, nowMs: Long, raw: PomodoroSettings): PhaseSlot {
     val s = raw.sane()
     val elapsed = (nowMs - startMs).coerceAtLeast(0)
@@ -83,18 +93,31 @@ fun phaseAt(startMs: Long, nowMs: Long, raw: PomodoroSettings): PhaseSlot {
  * description — the only place this detail is kept, since the whole session is
  * logged to Kimai as a single unbroken entry.
  */
-fun sessionSummary(startMs: Long, stopMs: Long, raw: PomodoroSettings): String {
+fun sessionSummary(
+    startMs: Long,
+    stopMs: Long,
+    raw: PomodoroSettings,
+    /** Period index → the time cut off it by a skip; see [PomodoroSkips]. */
+    skips: Map<Int, Long> = emptyMap(),
+): String {
     val s = raw.sane()
     val total = (stopMs - startMs).coerceAtLeast(0)
+    // Skipping ends a period early, which is the same as the schedule running
+    // ahead of the clock: the nominal timeline covers the real elapsed time plus
+    // everything skipped off it. Periods are counted along that timeline, but
+    // what each one is credited with is the time actually spent in it.
+    val nominal = total + skips.values.sum()
     var cursor = 0L
+    var index = 0
     val counts = mutableMapOf<Phase, Int>()
     val spent = mutableMapOf<Phase, Long>()
     for (kind in kinds(s)) {
-        if (cursor >= total) break
-        val len = kind.lengthMs(s).coerceAtMost(total - cursor)
+        if (cursor >= nominal) break
+        val len = kind.lengthMs(s).coerceAtMost(nominal - cursor)
         counts[kind] = (counts[kind] ?: 0) + 1
-        spent[kind] = (spent[kind] ?: 0) + len
+        spent[kind] = (spent[kind] ?: 0) + (len - (skips[index] ?: 0L)).coerceAtLeast(0L)
         cursor += len
+        index++
     }
     fun line(kind: Phase, label: String): String? {
         val n = counts[kind] ?: return null
@@ -105,6 +128,8 @@ fun sessionSummary(startMs: Long, stopMs: Long, raw: PomodoroSettings): String {
         line(Phase.WORK, "Work periods"),
         line(Phase.BREAK, "Short breaks"),
         line(Phase.LONG_BREAK, "Long breaks"),
+        if (skips.isEmpty()) null
+        else "Ended early: ${skips.size} (${fmt(skips.values.sum())} skipped)",
         "Lengths: work ${s.workMinutes}m · break ${s.breakMinutes}m · " +
             "long break ${s.longBreakMinutes}m after ${s.breaksBeforeLong} " +
             if (s.breaksBeforeLong == 1) "break" else "breaks",

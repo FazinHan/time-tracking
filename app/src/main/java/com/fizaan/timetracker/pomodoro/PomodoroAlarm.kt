@@ -50,7 +50,7 @@ object PomodoroAlarm {
             return
         }
         val now = System.currentTimeMillis()
-        val at = phaseAt(start, now, prefs.pomodoroSessionSettings).endMs
+        val at = phaseAt(prefs.pomodoroTimelineOrigin, now, prefs.pomodoroSessionSettings).endMs
         val am = context.getSystemService(AlarmManager::class.java)
         val show = PendingIntent.getActivity(
             context, ALARM_REQUEST + 1,
@@ -86,7 +86,8 @@ class PomodoroReceiver : BroadcastReceiver() {
         val prefs = Prefs(context)
         if (prefs.pomodoroStartMs <= 0L) return
         val slot = phaseAt(
-            prefs.pomodoroStartMs, System.currentTimeMillis(), prefs.pomodoroSessionSettings,
+            prefs.pomodoroTimelineOrigin, System.currentTimeMillis(),
+            prefs.pomodoroSessionSettings,
         )
         val pending = goAsync()
         PomodoroAlert.show(context, slot)

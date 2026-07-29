@@ -65,8 +65,9 @@ A pomodoro session is **one unbroken Kimai entry** covering all of its work and 
 - The lengths (gear, top right) are **work**, **break**, **long break**, and **how many breaks before a long one** — 25 / 5 / 15 / 3 by default. Edits apply to the *next* session; one already running keeps the lengths it began with.
 - While **working**, the screen is deliberately bare: static grey on black, no menu, no settings.
 - While on a **break**, the stop button turns to the familiar pulsing red.
+- **Skip** (the pill, top right) ends the current period there and then and starts the next one — work → break or break → work. The schedule moves with it, so everything after lands on the new rhythm.
 - At every boundary the app **wakes the phone, puts itself on screen** — over the lock screen — and plays a short tone on the alarm stream, so a break still ends on time with the screen off and the app closed.
-- Stopping writes the session's shape into the entry's **description**: how many work periods, how long, and the lengths in force. Nothing about the phases is stored anywhere else.
+- Stopping writes the session's shape into the entry's **description**: how many work periods, how long, how many were cut short by skipping, and the lengths in force. Nothing about the phases is stored anywhere else.
 
 ### Visualisations
 
