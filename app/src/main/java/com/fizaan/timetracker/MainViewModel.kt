@@ -43,6 +43,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 
 enum class AppScreen { TIMER, POMODORO, VIZ, SHEET, CALENDAR, TOOLS }
 enum class VizTab { PIE, BAR }
@@ -115,6 +116,8 @@ data class SheetState(
     // Filters. A null activity/tag/range means "no filter"; tag == UNTAGGED
     // matches entries without tags. from/to are inclusive calendar days.
     val filterActivityId: Int? = null,
+    /** Several activities at once, as the pie's "Other" wedge opens them. */
+    val filterActivityIds: List<Int>? = null,
     val filterTag: String? = null,
     val filterFrom: LocalDate? = null,
     val filterTo: LocalDate? = null,
@@ -136,10 +139,14 @@ data class CalendarState(
 )
 
 /**
- * Result of the frequency tool. Each frequency is sessions ÷ the number of
- * distinct *active* periods of that granularity (days/weeks/months/years that
- * actually had a session), so empty periods never dilute the count. Time spent
- * is reported separately as a full-year projection over the selected span.
+ * Result of the frequency tool. Rates are sessions ÷ the *whole* selected span
+ * — every day in the range counts, whether anything was tracked on it or not —
+ * so a fortnight off pulls the average down the way it should. [activeDays] is
+ * kept for the summary line, as context rather than a divisor.
+ *
+ * [firstEntry] is the earliest session found in the range: everything before it
+ * is a period we have no evidence about, which is what the short-history
+ * warning is drawn from.
  */
 data class FreqResult(
     val activityId: Int,
@@ -147,11 +154,14 @@ data class FreqResult(
     val to: LocalDate,
     val sessions: Int,
     val totalSeconds: Long,
+    val spanDays: Int,
     val activeDays: Int,
-    val activeWeeks: Int,
-    val activeMonths: Int,
-    val activeYears: Int,
-)
+    val firstEntry: LocalDate?,
+) {
+    /** Days of actual observation: from the first session to the end of the range. */
+    val observedDays: Int
+        get() = firstEntry?.let { (ChronoUnit.DAYS.between(it, to) + 1).toInt() } ?: 0
+}
 
 /**
  * What a batch operation will do. [RENAME_ACTIVITY] and [MOVE_ACTIVITY] are the
@@ -1011,10 +1021,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             to = to,
             sessions = mine.size,
             totalSeconds = total,
+            spanDays = (ChronoUnit.DAYS.between(from, to) + 1).coerceAtLeast(1).toInt(),
             activeDays = dates.distinct().size,
-            activeWeeks = dates.map { it.with(DayOfWeek.MONDAY) }.distinct().size,
-            activeMonths = dates.map { it.withDayOfMonth(1) }.distinct().size,
-            activeYears = dates.map { it.year }.distinct().size,
+            firstEntry = dates.minOrNull(),
         )
     }
 
@@ -1394,7 +1403,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ---------------- Timesheet filters ----------------
 
     fun setSheetActivityFilter(id: Int?) {
-        _sheet.value = _sheet.value.copy(filterActivityId = id)
+        // Picking from the menu replaces a multi-activity filter outright.
+        _sheet.value = _sheet.value.copy(filterActivityId = id, filterActivityIds = null)
     }
 
     fun setSheetTagFilter(tag: String?) {
@@ -1427,18 +1437,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearSheetFilters() {
         _sheet.value = _sheet.value.copy(
-            filterActivityId = null, filterTag = null,
+            filterActivityId = null, filterActivityIds = null, filterTag = null,
             filterFrom = null, filterTo = null, filterPreset = SheetPeriod.ALL,
         )
     }
 
     /**
-     * Jump from a chart legend to the timesheet with the clicked activity/tag
-     * and the chart's visible date window pre-applied.
+     * Jump from a chart to the timesheet with the clicked activity/tag and the
+     * chart's visible date window pre-applied. [activityIds] carries the several
+     * activities behind an "Other" wedge, in place of a single one.
      */
-    fun openSheetFiltered(activityId: Int?, tag: String?, from: LocalDate, to: LocalDate) {
+    fun openSheetFiltered(
+        activityId: Int?,
+        tag: String?,
+        from: LocalDate,
+        to: LocalDate,
+        activityIds: List<Int>? = null,
+    ) {
         _sheet.value = _sheet.value.copy(
-            filterActivityId = activityId, filterTag = tag,
+            filterActivityId = activityId, filterActivityIds = activityIds, filterTag = tag,
             filterFrom = from, filterTo = to, filterPreset = SheetPeriod.CUSTOM,
         )
         navigate(AppScreen.SHEET)

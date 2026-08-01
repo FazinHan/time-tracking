@@ -4,6 +4,7 @@ import android.content.res.Configuration
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -44,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -54,6 +56,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -66,9 +69,13 @@ import com.fizaan.timetracker.VizState
 import com.fizaan.timetracker.VizTab
 import com.fizaan.timetracker.data.Activity
 import com.fizaan.timetracker.data.TimesheetEntry
+import com.fizaan.timetracker.util.LIFE_THINGS
+import com.fizaan.timetracker.util.TaggedSpan
 import com.fizaan.timetracker.util.entryLocalDate
 import com.fizaan.timetracker.util.entrySeconds
 import com.fizaan.timetracker.util.formatDuration
+import com.fizaan.timetracker.util.parseKimaiMillis
+import com.fizaan.timetracker.util.resolveTagMillis
 import kotlinx.coroutines.delay
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -77,8 +84,9 @@ import kotlin.math.min
 
 /**
  * One drawable share of a chart. [activityId]/[tag] identify what was
- * aggregated so legend clicks can open the timesheet pre-filtered
- * (tag == UNTAGGED for the untagged bucket).
+ * aggregated so clicks can open the timesheet pre-filtered
+ * (tag == UNTAGGED for the untagged bucket). [activityIds] is set instead of
+ * [activityId] on the collapsed "Other" slice, which stands for several.
  */
 data class Slice(
     val label: String,
@@ -86,6 +94,7 @@ data class Slice(
     val seconds: Long,
     val activityId: Int? = null,
     val tag: String? = null,
+    val activityIds: List<Int>? = null,
 )
 
 private data class DayStack(val date: LocalDate, val segments: List<Slice>, val total: Long)
@@ -101,7 +110,7 @@ fun VizScreen(
     onPieToday: () -> Unit,
     onRefresh: () -> Unit,
     onClearError: () -> Unit,
-    onLegendClick: (activityId: Int?, tag: String?, from: LocalDate, to: LocalDate) -> Unit,
+    onLegendClick: (activityId: Int?, tag: String?, from: LocalDate, to: LocalDate, activityIds: List<Int>?) -> Unit,
 ) {
     // Live clock so running entries keep growing while the screen is open.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -206,20 +215,49 @@ private fun computeSlices(
                     activityId = actId,
                 )
             }
+        // Productivity is a claim about time, not about entries, so parallel
+        // timers are resolved onto one timeline first: see resolveTagMillis.
         PieMode.TAG -> {
             val allTags = entries.flatMap { it.tags.orEmpty() }.distinct().sorted()
-            entries
-                .groupBy { it.tags?.firstOrNull()?.takeIf { t -> t.isNotBlank() } ?: "" }
-                .map { (tag, list) ->
-                    Slice(
-                        label = tag.ifBlank { "untagged" },
-                        color = colorForTag(tag, allTags),
-                        seconds = list.sumOf { entrySeconds(it.begin, it.end, it.duration, now) },
-                        tag = tag,
-                    )
-                }
+            val spans = entries.mapNotNull { e ->
+                val begin = parseKimaiMillis(e.begin) ?: return@mapNotNull null
+                val end = if (e.end == null) now else parseKimaiMillis(e.end) ?: return@mapNotNull null
+                TaggedSpan(begin, end, e.tags?.firstOrNull()?.takeIf { t -> t.isNotBlank() } ?: "")
+            }
+            resolveTagMillis(spans).map { (tag, millis) ->
+                Slice(
+                    label = tag.ifBlank { "untagged" },
+                    color = colorForTag(tag, allTags),
+                    seconds = millis / 1000,
+                    tag = tag,
+                )
+            }
         }
     }.filter { it.seconds > 0 }.sortedByDescending { it.seconds }
+}
+
+/** A slice this small is a sliver on a 240dp pie — legible only in the legend. */
+private const val SmallSliceShare = 0.05f
+
+/** Below this many slivers, collapsing them costs more clarity than it buys. */
+private const val MinSlicesToCollapse = 3
+
+/**
+ * Fold a crowded tail of tiny activities into one "Other" wedge — a drawing
+ * decision only: the legend below still lists every one of them, and the wedge
+ * carries their ids so it opens the timesheet on exactly that set.
+ */
+private fun condenseSmall(slices: List<Slice>): List<Slice> {
+    val total = slices.sumOf { it.seconds }
+    if (total <= 0) return slices
+    val (small, large) = slices.partition { it.seconds.toFloat() / total < SmallSliceShare }
+    if (small.size < MinSlicesToCollapse) return slices
+    return large + Slice(
+        label = "Other",
+        color = OtherGray,
+        seconds = small.sumOf { it.seconds },
+        activityIds = small.mapNotNull { it.activityId },
+    )
 }
 
 private val DayLabelFmt = DateTimeFormatter.ofPattern("EEE d MMM")
@@ -252,16 +290,18 @@ private fun PieTab(
     onPieMode: (PieMode) -> Unit,
     onPeriod: (VizPeriod) -> Unit,
     onShiftPie: (Int) -> Unit,
-    onLegendClick: (activityId: Int?, tag: String?, from: LocalDate, to: LocalDate) -> Unit,
+    onLegendClick: (activityId: Int?, tag: String?, from: LocalDate, to: LocalDate, activityIds: List<Int>?) -> Unit,
 ) {
     val slices = remember(state.pieEntries, state.activities, state.pieMode, now) {
         computeSlices(state.pieEntries, state.activities, state.pieMode, now)
     }
     val total = slices.sumOf { it.seconds }
     // 'life things' stays out of the drawn pie (it plays no part in the
-    // productivity score) but keeps its legend row below.
+    // productivity score) but keeps its legend row below. A long tail of tiny
+    // activities is collapsed into one wedge, for the drawing only.
     val drawnSlices = remember(slices, state.pieMode) {
-        if (state.pieMode == PieMode.TAG) slices.filterNot { it.tag == "life things" } else slices
+        if (state.pieMode == PieMode.TAG) slices.filterNot { it.tag == LIFE_THINGS }
+        else condenseSmall(slices)
     }
     val drawnTotal = drawnSlices.sumOf { it.seconds }
 
@@ -269,6 +309,13 @@ private fun PieTab(
     val (from, to) = remember(state.period, state.pieOffset, today) {
         pieRange(state.period, state.pieOffset, today)
     }
+
+    // Tapping a slice pulls it out and names it; tapping it again is the same
+    // as tapping its legend row. Any change of pie drops the selection.
+    var selected by remember(state.pieMode, state.period, state.pieOffset) {
+        mutableStateOf<String?>(null)
+    }
+    val selectedSlice = drawnSlices.firstOrNull { it.label == selected }
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         // Same paging control the calendar carries: back and forward a whole
@@ -311,25 +358,40 @@ private fun PieTab(
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 )
             } else {
-                // Tag pie: the centre shows a productivity score — productive
-                // share of the *classified* (tagged) time — instead of the total.
-                // Semi-productive time counts at half weight.
                 val productive = slices.firstOrNull { it.label == "productive" }?.seconds ?: 0L
                 val unproductive = slices.firstOrNull { it.label == "unproductive" }?.seconds ?: 0L
                 val semiProductive = slices.firstOrNull { it.label == "semi-productive" }?.seconds ?: 0L
                 val classified = productive + unproductive + semiProductive
-                if (state.pieMode == PieMode.TAG && classified > 0) {
-                    PieChart(
-                        drawnSlices, drawnTotal,
+                val onSliceTap: (Slice?) -> Unit = { s ->
+                    when {
+                        s == null -> selected = null
+                        s.label == selected ->
+                            onLegendClick(s.activityId, s.tag, from, to, s.activityIds)
+                        else -> selected = s.label
+                    }
+                }
+                when {
+                    selectedSlice != null -> PieChart(
+                        drawnSlices, drawnTotal, selectedSlice.label, onSliceTap,
+                        centerLabel = formatDuration(selectedSlice.seconds),
+                        centerSub = selectedSlice.label,
+                    )
+                    // Productivity pie: the centre shows the score rather than a
+                    // total — productive share of the classified (tagged) time,
+                    // with semi-productive counting at half weight.
+                    state.pieMode == PieMode.TAG && classified > 0 -> PieChart(
+                        drawnSlices, drawnTotal, null, onSliceTap,
                         centerLabel = "${((productive + semiProductive * 0.5f) * 100f / classified + 0.5f).toInt()}%",
                         centerSub = "productive",
                     )
-                } else {
-                    PieChart(drawnSlices, drawnTotal, centerLabel = formatDuration(total), centerSub = "total")
+                    else -> PieChart(
+                        drawnSlices, drawnTotal, null, onSliceTap,
+                        centerLabel = formatDuration(total), centerSub = "total",
+                    )
                 }
                 Spacer(Modifier.height(20.dp))
                 slices.forEach { s ->
-                    LegendRow(s, total) { onLegendClick(s.activityId, s.tag, from, to) }
+                    LegendRow(s, total) { onLegendClick(s.activityId, s.tag, from, to, null) }
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -340,12 +402,12 @@ private fun PieTab(
                 selected = state.pieMode == PieMode.ACTIVITY,
                 onClick = { onPieMode(PieMode.ACTIVITY) },
                 shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-            ) { Text("Activity pie") }
+            ) { Text("Activities") }
             SegmentedButton(
                 selected = state.pieMode == PieMode.TAG,
                 onClick = { onPieMode(PieMode.TAG) },
                 shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-            ) { Text("Tag pie") }
+            ) { Text("Productivity") }
         }
         Spacer(Modifier.height(8.dp))
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -361,12 +423,37 @@ private fun PieTab(
     }
 }
 
+/**
+ * The ring chart. [selectedLabel] is drawn pulled out of the circle; [onTap]
+ * receives the slice under the finger, or null for a tap that hit no slice.
+ */
 @Composable
-private fun PieChart(slices: List<Slice>, total: Long, centerLabel: String, centerSub: String) {
+private fun PieChart(
+    slices: List<Slice>,
+    total: Long,
+    selectedLabel: String?,
+    onTap: (Slice?) -> Unit,
+    centerLabel: String,
+    centerSub: String,
+) {
     val diameter = 240.dp
+    val explode = 10.dp
+    val ring = 46.dp
     Box(contentAlignment = Alignment.Center) {
-        Canvas(modifier = Modifier.size(diameter)) {
-            val strokeW = 46.dp.toPx()
+        Canvas(
+            modifier = Modifier
+                .size(diameter)
+                .pointerInput(slices, total) {
+                    // The band is widened by the pull-out distance so a tap on a
+                    // slice that has already moved out still lands on it.
+                    val outer = size.width / 2f
+                    val inner = outer - ring.toPx() - explode.toPx()
+                    detectTapGestures { at ->
+                        onTap(sliceAt(at, size.width / 2f, size.height / 2f, inner, outer + explode.toPx(), slices, total))
+                    }
+                }
+        ) {
+            val strokeW = ring.toPx()
             val gapPx = 2.dp.toPx()
             val inset = strokeW / 2
             val arcSize = Size(size.width - strokeW, size.height - strokeW)
@@ -376,12 +463,21 @@ private fun PieChart(slices: List<Slice>, total: Long, centerLabel: String, cent
             var start = -90f
             slices.forEach { s ->
                 val sweep = (s.seconds.toFloat() / total) * 360f
+                // The pulled-out slice is the same arc, shifted along its own
+                // bisector so it leaves the circle without changing shape.
+                val shift = if (s.label == selectedLabel) {
+                    val mid = Math.toRadians((start + sweep / 2).toDouble())
+                    Offset(
+                        (kotlin.math.cos(mid) * explode.toPx()).toFloat(),
+                        (kotlin.math.sin(mid) * explode.toPx()).toFloat(),
+                    )
+                } else Offset.Zero
                 drawArc(
                     color = s.color,
                     startAngle = start + gapDeg / 2,
                     sweepAngle = (sweep - gapDeg).coerceAtLeast(0.5f),
                     useCenter = false,
-                    topLeft = Offset(inset, inset),
+                    topLeft = Offset(inset + shift.x, inset + shift.y),
                     size = arcSize,
                     style = Stroke(width = strokeW),
                 )
@@ -402,6 +498,36 @@ private fun PieChart(slices: List<Slice>, total: Long, centerLabel: String, cent
             )
         }
     }
+}
+
+/**
+ * Which slice a tap at [at] landed on, by the angle around the centre —
+ * null for the hole in the middle or anything outside the ring, both of which
+ * read as "never mind".
+ */
+private fun sliceAt(
+    at: Offset,
+    cx: Float,
+    cy: Float,
+    innerRadius: Float,
+    outerRadius: Float,
+    slices: List<Slice>,
+    total: Long,
+): Slice? {
+    if (total <= 0L) return null
+    val dx = at.x - cx
+    val dy = at.y - cy
+    val dist = kotlin.math.hypot(dx, dy)
+    if (dist < innerRadius || dist > outerRadius) return null
+    // Slices are laid out clockwise from twelve o'clock; atan2 starts at three.
+    val deg = (Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())) + 450.0) % 360.0
+    var start = 0.0
+    slices.forEach { s ->
+        val sweep = s.seconds.toDouble() / total * 360.0
+        if (deg >= start && deg < start + sweep) return s
+        start += sweep
+    }
+    return slices.lastOrNull()   // rounding can leave a hair's gap at the end
 }
 
 @Composable
@@ -441,7 +567,7 @@ private fun LegendRow(s: Slice, total: Long, onClick: () -> Unit) {
 private fun BarTab(
     state: VizState,
     now: Long,
-    onLegendClick: (activityId: Int?, tag: String?, from: LocalDate, to: LocalDate) -> Unit,
+    onLegendClick: (activityId: Int?, tag: String?, from: LocalDate, to: LocalDate, activityIds: List<Int>?) -> Unit,
 ) {
     val days = remember(state.barEntries, state.activities, now) {
         buildDayStacks(state.barEntries, state.activities, now)
@@ -511,7 +637,7 @@ private fun BarTab(
                                 ?.date ?: LocalDate.now()
                             onLegendClick(
                                 act.id, null,
-                                newest.minusDays((visibleDays - 1).toLong()), newest,
+                                newest.minusDays((visibleDays - 1).toLong()), newest, null,
                             )
                         },
                     ) {

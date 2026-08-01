@@ -87,9 +87,26 @@ A pomodoro session is **one unbroken entry** covering all of its work and break 
 
 ### Visualisations
 
-- **Pie** — share of time by **activity** or by **tag**, over a **day / week / month / year**. Arrows page back through previous periods, and a button in the bar returns to the present. Tapping a legend row opens the Timesheet filtered to it.
+- **Pie** — share of time by **Activities** or by **Productivity** (tags), over a **day / week / month / year**. Arrows page back through previous periods, and a button in the bar returns to the present.
+- **Tap a slice** to pull it out of the ring; the centre then names it and gives its time. **Tap it again** to open the Timesheet filtered to it over the period on screen — the same jump a legend row makes.
+- When **three or more activities** are each under **5%** of the pie, they are drawn as a single grey **Other** wedge. That is a drawing decision only: the legend below still lists every one of them, and tapping the wedge twice opens the Timesheet on exactly that set of activities.
 - **Bar** — daily totals over the last 30 days.
 - Colours come from the activity's own colour, falling back to a fixed accessible palette so an activity always keeps the same slot.
+
+#### Parallel timers and the productivity score
+
+Two timers can run at once, so time can be claimed twice over. The Productivity
+pie won't have it: every instant belongs to **one** tag, the most productive one
+running at the time.
+
+- Precedence is **productive > semi-productive > unproductive > everything else**, untagged included.
+- Only the **intersection** is contested. Where a lower-ranked entry runs alone, that stretch stays its own — one entry inside another simply disappears, one hanging off the end keeps its tail.
+- Two entries sharing a tag can't double-count their overlap either; equal ranks are settled by whichever started first.
+- **`life things` is exempt.** It isn't a judgement about productivity, so it neither takes time from a classified entry nor loses any to one — a walk logged over a work session leaves both intact. It is still de-duplicated against itself.
+
+The score in the centre is the productive share of *classified* (tagged) time,
+with semi-productive counted at half weight. The **Activities** pie is untouched
+by all this: it reports each activity's own time, overlaps and all.
 
 ### Timesheet
 
@@ -109,7 +126,8 @@ A week-view grid of entries laid out against the clock.
 
 ### Tools
 
-- **Frequency** — for one activity over a date range: how many sessions, total time, and how often it happens per active day/week/month/year. Empty periods are excluded so the rate reflects when you actually did it, plus a full-year projection of the time.
+- **Frequency** — for one activity over a date range: how many sessions, total time, and how often that works out per day/week/month/year, plus a full-year projection of the time. Rates divide by the **whole range**, empty days included, so they read as a rate rather than an intensity: a fortnight off pulls the average down. The number of days that did have sessions is reported alongside, as context.
+  - Under **30 days of data** — counted from the activity's first session in the range, since anything earlier is a period we know nothing about — the result carries a note saying the rates may be well off. Ranges with no sessions at all say so outright.
 - **Batch edit** — narrow entries down by activity, tag, duration and date range, then apply one action to all of them: rename the activity, move them to another activity, set tags, set a colour, or delete. Deletion asks twice.
 - **Storage** — how much the offline cache is holding, or, local-only, how big the database itself has grown.
 
@@ -174,13 +192,18 @@ app/src/main/java/com/fizaan/timetracker/
 │   ├── SetupScreen.kt     # Credentials, project, theme
 │   ├── Theme.kt           # Accent, contrast rules, colour scheme
 │   └── VizColors.kt       # Chart palette
-└── util/Time.kt           # Kimai timestamp parsing/formatting
+└── util/
+    ├── Time.kt            # Kimai timestamp parsing/formatting
+    └── Overlap.kt         # Resolving parallel entries onto one timeline (pure)
 ```
+
+`app/src/test/` holds JVM unit tests for the pure logic — currently the overlap
+rules. Run them with `./gradlew test`.
 
 ## Notes and limitations
 
 - **Single project.** Everything is scoped to the one project chosen at setup (local-only mode has exactly one).
-- **Two timers at once**, in both modes — the local store enforces the same ceiling Kimai does.
+- **Two timers at once**, in both modes — the local store enforces the same ceiling Kimai does. Where they overlap, the Productivity pie credits only one of them; see above.
 - **Kimai rounds to the minute** (begin down, end up), so a summary's elapsed total can differ from an entry's stored duration by up to a minute.
 - The app is **dark only** — the system light/dark setting is ignored.
 - Auto Backup is on, which means the API token can be included in a Google account backup. Turn `android:allowBackup` off in the manifest if that matters to you.

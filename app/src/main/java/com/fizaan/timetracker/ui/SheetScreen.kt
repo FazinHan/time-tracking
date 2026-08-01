@@ -240,6 +240,7 @@ fun SheetScreen(
 
 private fun entryMatchesFilters(e: TimesheetEntry, state: SheetState): Boolean {
     if (state.filterActivityId != null && e.activity != state.filterActivityId) return false
+    state.filterActivityIds?.let { if (e.activity !in it) return false }
     state.filterTag?.let { wanted ->
         val tags = e.tags?.filter { it.isNotBlank() }.orEmpty()
         val ok = if (wanted == UNTAGGED) tags.isEmpty() else tags.contains(wanted)
@@ -270,8 +271,8 @@ private fun FilterBar(
     var pickDate by remember { mutableStateOf(false) }
     val rangeFmt = remember { DateTimeFormatter.ofPattern("d MMM") }
 
-    val anyFilter = state.filterActivityId != null || state.filterTag != null ||
-        state.filterFrom != null || state.filterTo != null
+    val anyFilter = state.filterActivityId != null || state.filterActivityIds != null ||
+        state.filterTag != null || state.filterFrom != null || state.filterTo != null
 
     Row(
         modifier = Modifier
@@ -282,9 +283,10 @@ private fun FilterBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box {
-            val actName = state.activities.firstOrNull { it.id == state.filterActivityId }?.name
+            val actName = state.filterActivityIds?.let { "${it.size} activities" }
+                ?: state.activities.firstOrNull { it.id == state.filterActivityId }?.name
             FilterChip(
-                selected = state.filterActivityId != null,
+                selected = state.filterActivityId != null || state.filterActivityIds != null,
                 onClick = { actMenu = true },
                 label = { Text(actName ?: "Activity") },
                 trailingIcon = { Icon(Icons.Filled.ArrowDropDown, null) },

@@ -22,6 +22,9 @@ val FallbackPalette = listOf(
 
 val UntaggedGray = Color(0xFF898781)
 
+/** The collapsed tail of an activity pie — see the "Other" slice in VizScreen. */
+val OtherGray = Color(0xFF6F7378)
+
 /** Parse "#RRGGBB" / "#AARRGGBB" from the server; null if malformed. */
 fun parseHexColor(hex: String?): Color? {
     if (hex.isNullOrBlank()) return null

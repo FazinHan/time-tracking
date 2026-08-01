@@ -57,7 +57,6 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
-import java.time.temporal.ChronoUnit
 
 /** Which tool is currently open within the Tools section. */
 private enum class Tool { NONE, FREQUENCY, BATCH }
@@ -339,18 +338,19 @@ private fun FrequencyTool(
 
 @Composable
 private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
-    if (r.activeDays <= 0) return
-    // Each frequency = sessions ÷ number of active periods of that granularity,
-    // so empty days/weeks/months/years don't dilute the count. With all data in
-    // one week/month/year, weekly/monthly/yearly all equal the total sessions.
+    // Every day of the range divides, including the empty ones, so these read
+    // as a rate rather than an intensity: the longer the quiet stretch, the
+    // lower the daily figure. The coarser rows are that same daily rate over a
+    // week, an average month and a year.
+    val span = r.spanDays.coerceAtLeast(1).toDouble()
+    val perDay = r.sessions / span
     val rows = listOf(
-        "Daily" to r.sessions / r.activeDays.toDouble(),
-        "Weekly" to r.sessions / r.activeWeeks.coerceAtLeast(1).toDouble(),
-        "Monthly" to r.sessions / r.activeMonths.coerceAtLeast(1).toDouble(),
-        "Yearly" to r.sessions / r.activeYears.coerceAtLeast(1).toDouble(),
+        "Daily" to perDay,
+        "Weekly" to perDay * 7,
+        "Monthly" to perDay * 30.44,
+        "Yearly" to perDay * 365.25,
     )
     // Time spent, projected to a full year over the selected span.
-    val span = (ChronoUnit.DAYS.between(r.from, r.to) + 1).coerceAtLeast(1).toDouble()
     val yearlySeconds = (r.totalSeconds * 365.25 / span).toLong()
     val yearShare = yearlySeconds / (365.25 * 24 * 3600) * 100.0
 
@@ -373,8 +373,9 @@ private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
             )
         }
         Text(
-            "Over ${r.activeDays} active day${if (r.activeDays == 1) "" else "s"}: ${r.sessions} session" +
-                "${if (r.sessions == 1) "" else "s"}, ${formatDuration(r.totalSeconds)} total",
+            "Over ${r.spanDays} day${if (r.spanDays == 1) "" else "s"} (${r.activeDays} with " +
+                "sessions): ${r.sessions} session${if (r.sessions == 1) "" else "s"}, " +
+                formatDuration(r.totalSeconds) + " total",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
         )
@@ -420,7 +421,38 @@ private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
                 modifier = Modifier.align(Alignment.End).padding(top = 2.dp),
             )
         }
+        ShortHistoryNote(r)
     }
+}
+
+/** Under this much history, a rate says more about the window than the habit. */
+private const val ShortHistoryDays = 30
+
+/**
+ * The caveat under a result computed from too little history. Days before the
+ * first session are days we know nothing about, so the true count is the span
+ * from that session onward — a fortnight of it can't tell you a yearly rate.
+ */
+@Composable
+private fun ShortHistoryNote(r: FreqResult) {
+    val text = when {
+        r.sessions == 0 ->
+            "No sessions for this activity in this range, so every rate above is zero."
+        r.observedDays < ShortHistoryDays -> {
+            val fmt = DateTimeFormatter.ofPattern("d MMM yyyy")
+            "Only ${r.observedDays} day${if (r.observedDays == 1) "" else "s"} of data for " +
+                "this activity — the first session here was on ${r.firstEntry?.format(fmt)}. " +
+                "Rates from a window this short swing on a single busy or quiet week, and " +
+                "the yearly figures especially may be well off."
+        }
+        else -> return
+    }
+    Text(
+        text,
+        fontSize = 12.sp,
+        color = CacheAmber,
+        modifier = Modifier.padding(top = 12.dp),
+    )
 }
 
 @Composable
