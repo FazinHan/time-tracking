@@ -89,7 +89,7 @@ A pomodoro session is **one unbroken entry** covering all of its work and break 
 
 - **Pie** — share of time by **Activities** or by **Productivity** (tags), over a **day / week / month / year**. Arrows page back through previous periods, and a button in the bar returns to the present.
 - **Tap a slice** to pull it out of the ring; the centre then names it and gives its time. **Tap it again** to open the Timesheet filtered to it over the period on screen — the same jump a legend row makes.
-- When **three or more activities** are each under **5%** of the pie, they are drawn as a single grey **Other** wedge. That is a drawing decision only: the legend below still lists every one of them, and tapping the wedge twice opens the Timesheet on exactly that set of activities.
+- The smallest activities are drawn as a single grey **Other** wedge, taking in as many of them as fit while the wedge itself stays within **5%** of the pie — so "Other" is a sliver, never a chunk — and only if at least **three** land in it. That is a drawing decision only: the legend below still lists every one of them, and tapping the wedge twice opens the Timesheet on exactly that set of activities.
 - **Bar** — daily totals over the last 30 days.
 - Colours come from the activity's own colour, falling back to a fixed accessible palette so an activity always keeps the same slot.
 

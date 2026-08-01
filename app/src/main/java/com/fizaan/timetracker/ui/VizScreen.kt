@@ -236,27 +236,40 @@ private fun computeSlices(
     }.filter { it.seconds > 0 }.sortedByDescending { it.seconds }
 }
 
-/** A slice this small is a sliver on a 240dp pie — legible only in the legend. */
-private const val SmallSliceShare = 0.05f
+/** How much of the pie the collapsed wedge is allowed to swallow. */
+private const val OtherShareCap = 0.05f
 
 /** Below this many slivers, collapsing them costs more clarity than it buys. */
 private const val MinSlicesToCollapse = 3
 
 /**
- * Fold a crowded tail of tiny activities into one "Other" wedge — a drawing
- * decision only: the legend below still lists every one of them, and the wedge
- * carries their ids so it opens the timesheet on exactly that set.
+ * Fold the crowded tail of a pie into one "Other" wedge — a drawing decision
+ * only: the legend below still lists every one of them, and the wedge carries
+ * their ids so it opens the timesheet on exactly that set.
+ *
+ * The tail grows from the smallest slice up for as long as the whole of it
+ * stays within [OtherShareCap] of the pie, so "Other" is always a sliver
+ * itself. Collapsing by each slice's own size instead would let a long tail of
+ * small activities add up to a wedge bigger than anything it hides.
  */
 private fun condenseSmall(slices: List<Slice>): List<Slice> {
     val total = slices.sumOf { it.seconds }
     if (total <= 0) return slices
-    val (small, large) = slices.partition { it.seconds.toFloat() / total < SmallSliceShare }
-    if (small.size < MinSlicesToCollapse) return slices
-    return large + Slice(
+    val cap = (total * OtherShareCap).toLong()
+    // slices arrive largest first; walk back up from the smallest.
+    var tail = 0L
+    var count = 0
+    for (s in slices.asReversed()) {
+        if (tail + s.seconds > cap) break
+        tail += s.seconds
+        count++
+    }
+    if (count < MinSlicesToCollapse) return slices
+    return slices.dropLast(count) + Slice(
         label = "Other",
         color = OtherGray,
-        seconds = small.sumOf { it.seconds },
-        activityIds = small.mapNotNull { it.activityId },
+        seconds = tail,
+        activityIds = slices.takeLast(count).mapNotNull { it.activityId },
     )
 }
 
