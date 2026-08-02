@@ -48,8 +48,12 @@ fun contrastRatio(a: Color, b: Color): Float {
 fun accentContrast(accent: Color): Float =
     minOf(contrastRatio(accent, AppBg), contrastRatio(accent, AppSurface))
 
-/** WCAG AA for large text and UI components. Below this an accent is refused. */
-const val MinAccentContrast = 3f
+/**
+ * The floor an accent has to clear. Below WCAG's 3:1 for UI components, because
+ * this accent is decoration on a near-black ground rather than the thing being
+ * read — 2:1 still keeps a colour from disappearing into the background.
+ */
+const val MinAccentContrast = 2f
 
 fun accentUsable(accent: Color): Boolean = accentContrast(accent) >= MinAccentContrast
 

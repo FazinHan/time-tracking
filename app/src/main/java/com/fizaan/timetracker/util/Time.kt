@@ -36,6 +36,10 @@ fun parseKimaiLocal(iso: String?): LocalDateTime? =
 /** Format a local datetime the way Kimai's API expects it (no zone). */
 fun formatKimai(dt: LocalDateTime): String = dt.format(LOCAL_NO_ZONE)
 
+/** A local wall-clock time as an instant, read in this device's zone. */
+fun epochMillis(dt: LocalDateTime): Long =
+    dt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
 /** Seconds actually spent on an entry; running entries count up to [nowMillis]. */
 fun entrySeconds(begin: String?, end: String?, duration: Long?, nowMillis: Long): Long {
     if (end == null) {

@@ -8,6 +8,9 @@ import com.fizaan.timetracker.pomodoro.PomodoroSettings
 import com.fizaan.timetracker.pomodoro.PomodoroSkips
 import com.fizaan.timetracker.ui.DefaultAccent
 
+/** "No pomodoro entry" — a value no id, server-issued or queued, can take. */
+const val NO_ENTRY = Int.MIN_VALUE
+
 /** Simple persisted settings for the single-user personal tracker. */
 class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("time_tracker", Context.MODE_PRIVATE)
@@ -130,8 +133,13 @@ class Prefs(context: Context) {
         get() = sp.getLong("pomo_start", 0L)
         set(v) = sp.edit().putLong("pomo_start", v).apply()
 
+    /**
+     * The entry the session is being tracked against. Negative when it was
+     * started offline and is still sitting in the queue, so "none" needs a
+     * sentinel of its own rather than the old -1.
+     */
     var pomodoroEntryId: Int
-        get() = sp.getInt("pomo_entry", -1)
+        get() = sp.getInt("pomo_entry", NO_ENTRY).let { if (it == -1) NO_ENTRY else it }
         set(v) = sp.edit().putInt("pomo_entry", v).apply()
 
     var pomodoroActivityId: Int

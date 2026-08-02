@@ -1,8 +1,12 @@
 package com.fizaan.timetracker.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +18,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,21 +27,26 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fizaan.timetracker.SetupState
@@ -58,8 +66,12 @@ fun SetupScreen(
     onServerless: (Boolean) -> Unit,
     onFinishLocal: () -> Unit,
     accent: Int,
-    onAccent: (Int) -> Unit,
+    onUseAccent: (Int) -> Unit,
+    onLeave: () -> Unit,
 ) {
+    // Reached from the running app, back returns to it; on a first run there is
+    // nothing behind this screen and the gesture is left to the system.
+    BackHandler(enabled = state.canLeave, onBack = onLeave)
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -160,7 +172,7 @@ fun SetupScreen(
             }
 
             Spacer(Modifier.height(8.dp))
-            ThemePicker(accent = accent, onAccent = onAccent)
+            ThemePicker(accent = accent, onUseAccent = onUseAccent)
         } else {
             Text(
                 "Choose your customer and project (only needed once).",
@@ -240,26 +252,51 @@ private fun LocalModeNotes(hadServer: Boolean) {
 }
 
 /**
- * The accent picker: three presets, then any colour at all through the RGB
- * sliders. Whatever is chosen becomes every accented element in the app, so a
- * colour that would sink into the near-black background is refused rather than
- * quietly applied — see [accentUsable].
+ * The accent picker: three presets, then any colour at all through hue,
+ * saturation and brightness. Whatever is chosen becomes every accented element
+ * in the app, so a colour that would sink into the near-black background is
+ * refused rather than quietly applied — see [accentUsable].
+ *
+ * HSV rather than RGB because the choice being made is a colour, not three
+ * quantities of light: hue picks it, and the other two say how strong and how
+ * bright — which is also the axis the contrast floor lives on, so a refused
+ * colour is fixed by pulling one slider rather than guessing at three.
+ *
+ * Nothing here changes the app until the button at the bottom is pressed. A
+ * preset only moves the sliders onto it: picking a swatch is choosing what to
+ * look at, not an instruction to repaint everything.
  */
 @Composable
-private fun ThemePicker(accent: Int, onAccent: (Int) -> Unit) {
+private fun ThemePicker(accent: Int, onUseAccent: (Int) -> Unit) {
     Text("Theme", color = MaterialTheme.colorScheme.onBackground, fontSize = 18.sp)
     Text(
         "One colour carries the whole app. The stop button stays red whatever you pick.",
         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
         fontSize = 13.sp,
     )
+
+    // Seeded from whatever is in force, so the sliders start where the app is
+    // and a preset tap moves them with it.
+    val seed = remember(accent) { accent.toHsv() }
+    var hue by remember(accent) { mutableFloatStateOf(seed[0]) }
+    var saturation by remember(accent) { mutableFloatStateOf(seed[1]) }
+    var brightness by remember(accent) { mutableFloatStateOf(seed[2]) }
+
+    val candidate = Color.hsv(hue, saturation, brightness)
+    val usable = accentUsable(candidate)
+
     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Accent.entries.forEach { preset ->
             Swatch(
                 color = preset.color,
                 label = preset.label,
-                selected = preset.color.toArgb() == accent,
-                onClick = { onAccent(preset.color.toArgb()) },
+                selected = preset.color.toArgb() == candidate.toArgb(),
+                onClick = {
+                    val hsv = preset.color.toArgb().toHsv()
+                    hue = hsv[0]
+                    saturation = hsv[1]
+                    brightness = hsv[2]
+                },
             )
         }
     }
@@ -271,18 +308,26 @@ private fun ThemePicker(accent: Int, onAccent: (Int) -> Unit) {
         fontSize = 16.sp,
     )
 
-    // Seeded from whatever is in force, so the sliders start where the app is
-    // and a preset tap moves them with it.
-    var red by remember(accent) { mutableIntStateOf((accent shr 16) and 0xFF) }
-    var green by remember(accent) { mutableIntStateOf((accent shr 8) and 0xFF) }
-    var blue by remember(accent) { mutableIntStateOf(accent and 0xFF) }
-
-    val candidate = Color(red, green, blue)
-    val usable = accentUsable(candidate)
-
-    ChannelSlider("R", red, Color(0xFFE05252)) { red = it }
-    ChannelSlider("G", green, Color(0xFF52C46A)) { green = it }
-    ChannelSlider("B", blue, Color(0xFF5B8FE0)) { blue = it }
+    // Each track is drawn in the colours it would produce, so the sliders show
+    // the choice rather than describing it.
+    GradientSlider(
+        label = "Hue",
+        readout = "${hue.roundToInt()}°",
+        position = hue / 360f,
+        track = remember { List(7) { Color.hsv(it * 60f % 360f, 1f, 1f) } },
+    ) { hue = it * 360f }
+    GradientSlider(
+        label = "Saturation",
+        readout = "${(saturation * 100).roundToInt()}%",
+        position = saturation,
+        track = listOf(Color.hsv(hue, 0f, brightness), Color.hsv(hue, 1f, brightness)),
+    ) { saturation = it }
+    GradientSlider(
+        label = "Brightness",
+        readout = "${(brightness * 100).roundToInt()}%",
+        position = brightness,
+        track = listOf(Color.hsv(hue, saturation, 0f), Color.hsv(hue, saturation, 1f)),
+    ) { brightness = it }
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -296,7 +341,7 @@ private fun ThemePicker(accent: Int, onAccent: (Int) -> Unit) {
         )
         Column {
             Text(
-                String.format("#%02X%02X%02X", red, green, blue),
+                String.format("#%06X", candidate.toArgb() and 0xFFFFFF),
                 color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 16.sp,
                 fontFamily = FontFamily.Monospace,
@@ -318,7 +363,7 @@ private fun ThemePicker(accent: Int, onAccent: (Int) -> Unit) {
         )
     }
     Button(
-        onClick = { onAccent(candidate.toArgb()) },
+        onClick = { onUseAccent(candidate.toArgb()) },
         enabled = usable && candidate.toArgb() != accent,
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -351,34 +396,83 @@ private fun Swatch(color: Color, label: String, selected: Boolean, onClick: () -
     }
 }
 
+/** Packed ARGB as [hue 0..360, saturation 0..1, brightness 0..1]. */
+private fun Int.toHsv(): FloatArray =
+    FloatArray(3).also { android.graphics.Color.colorToHSV(this, it) }
+
+private val TrackHeight = 14.dp
+private val ThumbRadius = 9.dp
+
+/**
+ * One axis of the colour, drawn as the range it spans.
+ *
+ * Material's own slider paints a track in one flat colour, which says nothing
+ * about what moving it does; here the bar *is* the gradient being chosen from,
+ * so the hue strip is a rainbow and the brightness strip runs from black to the
+ * colour at full light. [position] and the value handed back are both 0..1.
+ */
 @Composable
-private fun ChannelSlider(label: String, value: Int, tint: Color, onValue: (Int) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            label,
-            color = tint,
-            fontSize = 14.sp,
-            fontFamily = FontFamily.Monospace,
-            modifier = Modifier.width(20.dp),
-        )
-        Slider(
-            value = value.toFloat(),
-            onValueChange = { onValue(it.roundToInt()) },
-            valueRange = 0f..255f,
-            colors = SliderDefaults.colors(
-                thumbColor = tint,
-                activeTrackColor = tint,
-            ),
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            value.toString().padStart(3),
-            color = MaterialTheme.colorScheme.onBackground,
-            fontSize = 14.sp,
-            fontFamily = FontFamily.Monospace,
-            modifier = Modifier.width(34.dp),
-        )
+private fun GradientSlider(
+    label: String,
+    readout: String,
+    position: Float,
+    track: List<Color>,
+    onPosition: (Float) -> Unit,
+) {
+    val outline = MaterialTheme.colorScheme.outline
+    Column {
+        Row {
+            Text(
+                label,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                fontSize = 12.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                readout,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(ThumbRadius * 2 + 6.dp)
+                // Tap to jump, drag to sweep — the thumb is only ever a
+                // reflection of where the finger last was.
+                .pointerInput(Unit) {
+                    detectTapGestures { onPosition(fraction(it.x, size.width)) }
+                }
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures { change, _ ->
+                        onPosition(fraction(change.position.x, size.width))
+                    }
+                },
+        ) {
+            val inset = ThumbRadius.toPx()
+            val barWidth = size.width - inset * 2
+            val barTop = (size.height - TrackHeight.toPx()) / 2f
+            drawRoundRect(
+                brush = Brush.horizontalGradient(track, startX = inset, endX = inset + barWidth),
+                topLeft = Offset(inset, barTop),
+                size = Size(barWidth, TrackHeight.toPx()),
+                cornerRadius = CornerRadius(TrackHeight.toPx() / 2f),
+            )
+            val cx = inset + barWidth * position.coerceIn(0f, 1f)
+            val cy = size.height / 2f
+            drawCircle(Color.White, radius = inset, center = Offset(cx, cy))
+            drawCircle(outline, radius = inset, center = Offset(cx, cy), style = Stroke(1.dp.toPx()))
+        }
     }
+}
+
+/** Where along the bar a touch landed, allowing for the thumb's own width. */
+private fun Density.fraction(x: Float, width: Int): Float {
+    val inset = ThumbRadius.toPx()
+    val span = (width - inset * 2).coerceAtLeast(1f)
+    return ((x - inset) / span).coerceIn(0f, 1f)
 }
 
 @Composable

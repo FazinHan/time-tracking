@@ -75,6 +75,7 @@ import com.fizaan.timetracker.SheetState
 import com.fizaan.timetracker.UNTAGGED
 import com.fizaan.timetracker.data.Activity
 import com.fizaan.timetracker.data.TimesheetEntry
+import com.fizaan.timetracker.data.isQueued
 import com.fizaan.timetracker.util.entrySeconds
 import com.fizaan.timetracker.util.formatDuration
 import com.fizaan.timetracker.util.formatKimai
@@ -222,6 +223,7 @@ fun SheetScreen(
             allTags = state.allTags,
             colorChoices = state.colorChoices,
             saving = state.saving,
+            offline = state.offline,
             onSave = onSave,
             onDismiss = onDismissEdit,
         )
@@ -511,11 +513,17 @@ private fun EntryRow(
         )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = act?.name ?: "#${entry.activity}",
-                fontSize = 16.sp,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = act?.name ?: "#${entry.activity}",
+                    fontSize = 16.sp,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                if (isQueued(entry.id)) {
+                    Spacer(Modifier.width(8.dp))
+                    QueuedBadge()
+                }
+            }
             val tags = entry.tags?.filter { it.isNotBlank() }.orEmpty()
             if (tags.isNotEmpty()) {
                 Text(
@@ -554,6 +562,35 @@ private fun EntryRow(
     }
 }
 
+/**
+ * The mark of an entry that exists only on this device. Amber, like the
+ * saved-data banner: something is not as it normally is, but nothing is wrong.
+ */
+@Composable
+private fun QueuedBadge() {
+    Text(
+        text = "QUEUED",
+        fontSize = 10.sp,
+        color = CacheAmber,
+        modifier = Modifier
+            .background(CacheAmber.copy(alpha = 0.16f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
+}
+
+@Composable
+private fun QueuedNote(text: String) {
+    Text(
+        text = text,
+        fontSize = 12.sp,
+        color = CacheAmber,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(CacheAmber.copy(alpha = 0.13f), RoundedCornerShape(8.dp))
+            .padding(10.dp),
+    )
+}
+
 // ---------------- Delete confirmation ----------------
 
 /**
@@ -585,7 +622,12 @@ private fun DeleteConfirmDialog(
                     append(name)
                     append("” entry")
                     begin?.let { append(" started ${it.format(whenFmt)}") }
-                    append(" from the server. This can't be undone.")
+                    if (isQueued(entry.id)) {
+                        append(" from the queue. The server was never told about " +
+                            "it, so there is nothing left to undo.")
+                    } else {
+                        append(" from the server. This can't be undone.")
+                    }
                 },
             )
         },
@@ -627,11 +669,17 @@ private fun EditEntryDialog(
     allTags: List<String>,
     colorChoices: Map<String, String>,
     saving: Boolean,
+    offline: Boolean,
     onSave: (entryId: Int, activityId: Int, beginIso: String, endIso: String?, newColor: String?, description: String, tags: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val act = activities.firstOrNull { it.id == entry.activity }
     val running = entry.end == null
+    val queued = isQueued(entry.id)
+    // Tags and colours belong to the server: a queued entry has none of its own
+    // to change yet, and with the server out of reach nothing else can be told
+    // about a change either. Times are all that's on offer in both cases.
+    val metaEditable = !queued && !offline
 
     var begin by remember(entry.id) {
         mutableStateOf(parseKimaiLocal(entry.begin) ?: LocalDateTime.now())
@@ -666,6 +714,18 @@ private fun EditEntryDialog(
         title = { Text(act?.name ?: "Entry") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                if (queued) {
+                    QueuedNote(
+                        "Waiting to be sent to the server. Its times can be changed " +
+                            "or it can be deleted; everything else waits until it lands.",
+                    )
+                } else if (offline) {
+                    QueuedNote(
+                        "The server can't be reached, so this entry can't be changed. " +
+                            "Only entries still queued on this device can.",
+                    )
+                }
+                if (queued || offline) Spacer(Modifier.height(14.dp))
                 FieldLabel("Start")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { pickBeginDate = true }) {
@@ -723,64 +783,67 @@ private fun EditEntryDialog(
                     }
                 }
 
-                Spacer(Modifier.height(14.dp))
-                FieldLabel("Description")
-                OutlinedTextField(
-                    value = description,
-                    onValueChange = { description = it },
-                    placeholder = { Text("What was this?") },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 1,
-                    maxLines = 3,
-                )
-
-                Spacer(Modifier.height(14.dp))
-                FieldLabel("Tags")
-                if (allTags.isEmpty()) {
-                    Text(
-                        "No tags on the server yet.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                if (metaEditable) {
+                    Spacer(Modifier.height(14.dp))
+                    FieldLabel("Description")
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        placeholder = { Text("What was this?") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 1,
+                        maxLines = 3,
                     )
-                } else {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        allTags.forEach { tag ->
-                            val isSel = selectedTags.contains(tag)
-                            FilterChip(
-                                selected = isSel,
-                                onClick = {
-                                    if (isSel) selectedTags.remove(tag) else selectedTags.add(tag)
-                                },
-                                label = { Text(tag) },
-                            )
+
+                    Spacer(Modifier.height(14.dp))
+                    FieldLabel("Tags")
+                    if (allTags.isEmpty()) {
+                        Text(
+                            "No tags on the server yet.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        )
+                    } else {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            allTags.forEach { tag ->
+                                val isSel = selectedTags.contains(tag)
+                                FilterChip(
+                                    selected = isSel,
+                                    onClick = {
+                                        if (isSel) selectedTags.remove(tag)
+                                        else selectedTags.add(tag)
+                                    },
+                                    label = { Text(tag) },
+                                )
+                            }
                         }
                     }
-                }
 
-                Spacer(Modifier.height(14.dp))
-                FieldLabel("Activity colour (applies everywhere)")
-                val swatches = colorChoices.ifEmpty { DefaultColorChoices }
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    swatches.values.forEach { hex ->
-                        val c = parseHexColor(hex) ?: return@forEach
-                        val selected = colorHex?.equals(hex, ignoreCase = true) == true
-                        Box(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .background(c, CircleShape)
-                                .border(
-                                    width = if (selected) 3.dp else 1.dp,
-                                    color = if (selected) Color.White
-                                    else Color.White.copy(alpha = 0.25f),
-                                    shape = CircleShape,
-                                )
-                                .clickable { colorHex = hex },
-                        )
+                    Spacer(Modifier.height(14.dp))
+                    FieldLabel("Activity colour (applies everywhere)")
+                    val swatches = colorChoices.ifEmpty { DefaultColorChoices }
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        swatches.values.forEach { hex ->
+                            val c = parseHexColor(hex) ?: return@forEach
+                            val selected = colorHex?.equals(hex, ignoreCase = true) == true
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .background(c, CircleShape)
+                                    .border(
+                                        width = if (selected) 3.dp else 1.dp,
+                                        color = if (selected) Color.White
+                                        else Color.White.copy(alpha = 0.25f),
+                                        shape = CircleShape,
+                                    )
+                                    .clickable { colorHex = hex },
+                            )
+                        }
                     }
                 }
             }

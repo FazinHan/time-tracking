@@ -158,7 +158,7 @@ private fun TimesheetEntry.stoppedAt(end: LocalDateTime) =
     copy(end = formatKimai(end)).withDuration()
 
 /** Keep `duration` consistent with the timestamps; 0 while still running. */
-private fun TimesheetEntry.withDuration(): TimesheetEntry {
+internal fun TimesheetEntry.withDuration(): TimesheetEntry {
     val b = parseKimaiMillis(begin)
     val e = parseKimaiMillis(end)
     return copy(duration = if (b == null || e == null) 0 else ((e - b) / 1000).coerceAtLeast(0))

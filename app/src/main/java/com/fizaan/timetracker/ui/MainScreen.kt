@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -99,38 +100,41 @@ fun MainScreen(
             .systemBarsPadding()
     ) {
         // Top bar
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onMenu) {
-                Icon(Icons.Filled.Menu, "Menu", tint = MaterialTheme.colorScheme.onBackground)
-            }
-            Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
-                Text(
-                    text = state.projectName.ifBlank { "Time Tracker" },
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontSize = 18.sp,
-                )
-                if (running) {
-                    val names = listOfNotNull(state.running, state.second)
-                        .joinToString(" + ") { it.activity?.name ?: "activity" }
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onMenu) {
+                    Icon(Icons.Filled.Menu, "Menu", tint = MaterialTheme.colorScheme.onBackground)
+                }
+                Column(modifier = Modifier.weight(1f).padding(start = 4.dp)) {
                     Text(
-                        text = "Tracking: $names",
-                        color = StopRed,
-                        fontSize = 13.sp,
+                        text = state.projectName.ifBlank { "Time Tracker" },
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontSize = 18.sp,
                     )
+                    if (running) {
+                        val names = listOfNotNull(state.running, state.second)
+                            .joinToString(" + ") { it.activity?.name ?: "activity" }
+                        Text(
+                            text = "Tracking: $names",
+                            color = StopRed,
+                            fontSize = 13.sp,
+                        )
+                    }
+                }
+                Row {
+                    IconButton(onClick = onRefresh) {
+                        Icon(Icons.Filled.Refresh, "Refresh", tint = MaterialTheme.colorScheme.onBackground)
+                    }
+                    IconButton(onClick = onReconfigure) {
+                        Icon(Icons.Filled.Settings, "Settings", tint = MaterialTheme.colorScheme.onBackground)
+                    }
                 }
             }
-            Row {
-                IconButton(onClick = onRefresh) {
-                    Icon(Icons.Filled.Refresh, "Refresh", tint = MaterialTheme.colorScheme.onBackground)
-                }
-                IconButton(onClick = onReconfigure) {
-                    Icon(Icons.Filled.Settings, "Settings", tint = MaterialTheme.colorScheme.onBackground)
-                }
-            }
+            QueueBanner(offline = state.offline, queued = state.queued)
         }
 
         // Center button
@@ -224,6 +228,40 @@ fun MainScreen(
             onStop = onStopEntry,
             onDismiss = onDismissStopChoice,
         )
+    }
+}
+
+/**
+ * What the app is doing without a server: still timing, and holding on to what
+ * it will send once there is one again. Nothing is drawn while the server is
+ * answering and the queue is empty.
+ */
+@Composable
+private fun QueueBanner(offline: Boolean, queued: Int) {
+    if (!offline && queued == 0) return
+    val line = when {
+        offline && queued > 0 ->
+            "No server. Still timing — $queued ${if (queued == 1) "change" else "changes"} " +
+                "waiting to be sent."
+        offline -> "No server. Starting and stopping still work; they'll be sent later."
+        else -> "$queued ${if (queued == 1) "change is" else "changes are"} still waiting to be sent."
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .background(CacheAmber.copy(alpha = 0.16f), CircleShape)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Filled.CloudOff,
+            contentDescription = null,
+            tint = CacheAmber,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.size(8.dp))
+        Text(line, color = CacheAmber, fontSize = 12.sp)
     }
 }
 

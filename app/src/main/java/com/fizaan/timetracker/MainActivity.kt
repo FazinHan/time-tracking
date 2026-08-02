@@ -12,6 +12,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -36,7 +37,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fizaan.timetracker.pomodoro.EXTRA_POMODORO_PHASE
 import com.fizaan.timetracker.pomodoro.Phase
 import com.fizaan.timetracker.pomodoro.PomodoroAlert
@@ -54,8 +54,22 @@ import kotlinx.coroutines.launch
 private data class Dest(val screen: AppScreen, val label: String, val icon: ImageVector)
 
 class MainActivity : ComponentActivity() {
+    /** The same instance the composables get; used outside composition below. */
+    private val vm: MainViewModel by viewModels()
+
     private val askNotifications =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    /**
+     * Switching the launcher's `activity-alias` tears down the task it was
+     * started from, so a colour change made on screen looks exactly like the app
+     * crashing. The icon is brought into line once the app is off screen, where
+     * the same work costs nothing to watch.
+     */
+    override fun onStop() {
+        super.onStop()
+        vm.syncLauncherIcon()
+    }
 
     /** Set when the app was opened by a pomodoro boundary alert. */
     private val alertPhase = MutableStateFlow<String?>(null)
@@ -115,7 +129,6 @@ class MainActivity : ComponentActivity() {
         PomodoroAlert.ensureChannel(this)
         applyAlertIntent(intent)
         setContent {
-            val vm: MainViewModel = viewModel()
             val ui by vm.ui.collectAsState()
             // The accent is read before anything is drawn, so a repaint is a
             // recomposition rather than a restart.
@@ -153,7 +166,8 @@ class MainActivity : ComponentActivity() {
                         onServerless = vm::onServerless,
                         onFinishLocal = vm::finishLocalSetup,
                         accent = ui.accent,
-                        onAccent = vm::setAccent,
+                        onUseAccent = vm::useAccent,
+                        onLeave = vm::leaveSetup,
                     )
                 } else {
                     val drawerState = rememberDrawerState(DrawerValue.Closed)

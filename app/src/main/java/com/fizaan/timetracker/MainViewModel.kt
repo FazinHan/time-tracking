@@ -13,6 +13,10 @@ import com.fizaan.timetracker.data.LOCAL_ID
 import com.fizaan.timetracker.data.LOCAL_NAME
 import com.fizaan.timetracker.data.LocalStore
 import com.fizaan.timetracker.data.Customer
+import com.fizaan.timetracker.data.NO_ENTRY
+import com.fizaan.timetracker.data.PendingQueue
+import com.fizaan.timetracker.data.PendingStop
+import com.fizaan.timetracker.data.PendingStore
 import com.fizaan.timetracker.data.Prefs
 import com.fizaan.timetracker.data.Project
 import com.fizaan.timetracker.data.TimesheetActive
@@ -20,6 +24,10 @@ import com.fizaan.timetracker.data.TimesheetCache
 import com.fizaan.timetracker.data.TimesheetCreate
 import com.fizaan.timetracker.data.TimesheetEntry
 import com.fizaan.timetracker.data.TimesheetUpdate
+import com.fizaan.timetracker.data.asActive
+import com.fizaan.timetracker.data.asEntry
+import com.fizaan.timetracker.data.isQueued
+import com.fizaan.timetracker.data.mergePending
 import androidx.core.app.NotificationManagerCompat
 import com.fizaan.timetracker.pomodoro.ALERT_NOTIFICATION_ID
 import com.fizaan.timetracker.pomodoro.Phase
@@ -31,9 +39,11 @@ import androidx.compose.ui.graphics.toArgb
 import com.fizaan.timetracker.ui.DefaultAccent
 import com.fizaan.timetracker.util.entryLocalDate
 import com.fizaan.timetracker.util.entrySeconds
+import com.fizaan.timetracker.util.epochMillis
 import com.fizaan.timetracker.util.formatKimai
 import com.fizaan.timetracker.util.parseKimaiLocal
 import com.fizaan.timetracker.util.parseKimaiMillis
+import java.io.IOException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -56,6 +66,9 @@ const val UNTAGGED = ""
 
 /** The tag that qualifies an activity for a pomodoro. */
 const val PRODUCTIVE_TAG = "productive"
+
+/** How many activities may be tracked at once — Kimai's own limit, mirrored. */
+const val MAX_TIMERS = 2
 
 /**
  * Marks a screen as rendering locally saved data instead of a live server
@@ -105,6 +118,8 @@ data class SheetState(
     val loading: Boolean = false,
     val error: String? = null,
     val cached: CacheInfo? = null,
+    /** The server couldn't be reached, so only the queue can be edited. */
+    val offline: Boolean = false,
     val saving: Boolean = false,
     val entries: List<TimesheetEntry> = emptyList(),
     val activities: List<Activity> = emptyList(),
@@ -254,6 +269,10 @@ data class UiState(
     val loading: Boolean = false,
     val busy: Boolean = false,          // an action (start/stop/create) is in flight
     val error: String? = null,
+    /** Last contact with the server failed: starts and stops go to the queue. */
+    val offline: Boolean = false,
+    /** How many queued signals are waiting to be sent. */
+    val queued: Int = 0,
     // Up to two timers can run at once: [running] is the one started first and
     // owns the big clock, [second] is the later one.
     val running: TimesheetActive? = null,
@@ -276,6 +295,8 @@ data class UiState(
 /** Setup-flow state (first run / reconfigure). */
 data class SetupState(
     val step: Int = 0,                  // 0 = credentials, 1 = pick customer+project
+    /** Reached from the running app rather than a first run, so it can be left. */
+    val canLeave: Boolean = false,
     /** Local-only: no server is contacted, and the URL/token are irrelevant. */
     val serverless: Boolean = false,
     /** Whether a server was ever configured — decides which warning is shown. */
@@ -297,6 +318,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = Prefs(app)
     private val cache = TimesheetCache(app)
     private val localStore = LocalStore(app)
+    private val pending = PendingStore(app)
+    /** The queue, mirrored in memory so a screen can be drawn from it directly. */
+    private var queue = PendingQueue()
     private val notifier = RunningNotifier(app)
     private val beginFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
 
@@ -330,7 +354,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sessionSettings = prefs.pomodoroSessionSettings,
             startMs = prefs.pomodoroStartMs,
             skew = prefs.pomodoroSkew,
-            entryId = prefs.pomodoroEntryId.takeIf { it >= 0 },
+            entryId = prefs.pomodoroEntryId.takeIf { it != NO_ENTRY },
             activityName = prefs.pomodoroActivityName,
         )
     )
@@ -338,24 +362,157 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         _ui.value = _ui.value.copy(accent = prefs.accentColor)
+        viewModelScope.launch { readQueue() }
         if (prefs.isConfigured) {
             _ui.value = _ui.value.copy(configured = true, projectName = prefs.projectName)
             refresh()
         }
     }
 
-    /** Repaint the app. Takes effect on the next frame; nothing is reloaded. */
+    /**
+     * Repaint the app. Takes effect on the next frame; nothing is reloaded, and
+     * the launcher icon deliberately isn't touched here — see
+     * [syncLauncherIcon].
+     */
     fun setAccent(argb: Int) {
         prefs.accentColor = argb
         _ui.value = _ui.value.copy(accent = argb)
-        // The launcher gets the nearest of the prebuilt icons, if that changed.
-        LauncherIcon.apply(ctx, argb)
     }
+
+    /**
+     * Apply a colour and leave the settings screen.
+     *
+     * Reconfiguring is the only way to reach the theme picker, so pressing the
+     * button has to put the app back where it was — not drop the user into the
+     * connection flow they never asked for.
+     */
+    fun useAccent(argb: Int) {
+        setAccent(argb)
+        leaveSetup()
+    }
+
+    /**
+     * Back out of settings, changing nothing. Only ever possible when the app is
+     * already set up: on a first run there is nowhere to go back to.
+     */
+    fun leaveSetup() {
+        if (!prefs.isConfigured) return
+        _ui.value = _ui.value.copy(configured = true, projectName = prefs.projectName)
+    }
+
+    /**
+     * Point the launcher at the icon nearest the accent.
+     *
+     * Switching an `activity-alias` tears down the task it was launched from, so
+     * doing this the moment a colour is picked looks exactly like the app
+     * crashing. It is done once the app is off screen instead, where the same
+     * work is invisible.
+     */
+    fun syncLauncherIcon() = LauncherIcon.apply(ctx, prefs.accentColor)
 
     private fun defaultUrlHint(): String =
         if (prefs.baseUrl.isNotBlank()) prefs.baseUrl else "http://192.168.0.110:8000"
 
     private fun api() = ApiProvider.get(ctx, prefs)
+
+    // ---------------- Offline queue ----------------
+    //
+    // With a server configured but out of reach, two things still have to work:
+    // starting an activity and stopping one. Both are written to a queue on the
+    // device and replayed the next time the server answers. Nothing else is ever
+    // queued — every other action still goes straight to the server and still
+    // fails when it isn't there.
+
+    /** Re-read the queue into memory and publish how much of it is waiting. */
+    private suspend fun readQueue() {
+        queue = pending.read()
+        _ui.value = _ui.value.copy(queued = queue.size)
+    }
+
+    /**
+     * Whether [e] means "no server", as opposed to the server saying no. Only
+     * the former may be queued: a refusal is an answer, and repeating it later
+     * would just be refused again.
+     */
+    private fun unreachable(e: Exception): Boolean =
+        e is IOException || (e.message ?: "").let {
+            it.contains("Failed to connect", true) ||
+                it.contains("Unable to resolve", true) ||
+                it.contains("timeout", true)
+        }
+
+    /** Local-only mode has no server to be cut off from, so it never queues. */
+    private fun canQueue(e: Exception): Boolean = !prefs.serverless && unreachable(e)
+
+    /**
+     * Send everything the queue is holding, oldest first, and drop each signal
+     * as it lands. Stops go first: freeing a running entry is what makes room
+     * for a queued start under Kimai's limit on concurrent timers.
+     *
+     * A still-absent server leaves the queue exactly as it was; anything else
+     * the server says is surfaced, because a signal it refuses will never leave
+     * on its own.
+     */
+    private suspend fun syncQueue() {
+        if (prefs.serverless) return
+        // Read it here rather than trusting the mirror: on a cold start this
+        // runs alongside the queue's first load off disk, and would otherwise
+        // find it empty and leave a real backlog sitting there.
+        readQueue()
+        if (queue.isEmpty) return
+        try {
+            queue.stops.forEach { stop ->
+                api().updateTimesheet(
+                    stop.entryId,
+                    TimesheetUpdate(
+                        begin = stop.beginIso, end = stop.endIso,
+                        description = stop.description,
+                    ),
+                )
+                pending.removeStop(stop.entryId)
+            }
+            queue.starts.sortedBy { it.beginIso }.forEach { start ->
+                val created = api().createTimesheet(
+                    TimesheetCreate(
+                        begin = start.beginIso,
+                        project = prefs.projectId,
+                        activity = start.activityId,
+                        description = start.description,
+                        tags = start.tags,
+                    )
+                )
+                // Created open, then closed: the POST takes no end of its own.
+                start.endIso?.let { end ->
+                    api().updateTimesheet(
+                        created.id,
+                        TimesheetUpdate(
+                            begin = start.beginIso, end = end,
+                            description = start.description, tags = start.tags,
+                        ),
+                    )
+                }
+                pending.removeStart(start.localId)
+            }
+        } catch (e: Exception) {
+            if (!unreachable(e)) {
+                _ui.value = _ui.value.copy(
+                    error = "Couldn't send a queued change: ${friendly(e)}",
+                )
+            }
+        }
+        readQueue()
+    }
+
+    /** A window of server entries with the queue folded in, ready to render. */
+    private fun merged(
+        entries: List<TimesheetEntry>,
+        begin: LocalDateTime,
+        end: LocalDateTime,
+    ): List<TimesheetEntry> =
+        if (prefs.serverless) entries
+        else mergePending(
+            entries, queue, prefs.projectId, epochMillis(begin), epochMillis(end),
+        )
 
     // ---------------- Setup flow ----------------
 
@@ -454,6 +611,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             legacyUser = prefs.legacyUser,
             serverless = prefs.serverless,
             hadServer = prefs.baseUrl.isNotBlank(),
+            canLeave = prefs.isConfigured,
         )
         _ui.value = _ui.value.copy(configured = false)
     }
@@ -463,16 +621,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refresh() {
         _ui.value = _ui.value.copy(loading = true, error = null)
         viewModelScope.launch {
+            syncQueue()
             try {
                 // Oldest first, so the timer that started earlier keeps the big clock.
-                val actives = api().active().sortedBy { parseKimaiMillis(it.begin) ?: 0L }
+                val server = api().active().sortedBy { parseKimaiMillis(it.begin) ?: 0L }
                 val acts = api().activities().filter { it.visible }.sortedBy { it.name.lowercase() }
                 // "recent" is a nice-to-have; don't let it break the main screen.
                 val recent = try { api().recent(8) } catch (e: Exception) { _ui.value.recent }
                 // Tags are used to build the picker; best-effort like recent.
                 val tags = try { api().tags() } catch (e: Exception) { _ui.value.allTags }
+                // Keep what's running on the device too: it's read outside any
+                // date range, so nothing else would ever write it down, and it
+                // is the first thing needed if the server goes away.
+                cache.remember(server.map { it.asEntry(prefs.projectId) }, acts)
+                // Anything the queue couldn't hand over still runs on the device.
+                val actives = server + queuedActives(acts)
                 _ui.value = _ui.value.copy(
                     loading = false,
+                    offline = false,
                     running = actives.getOrNull(0),
                     second = actives.getOrNull(1),
                     activities = acts,
@@ -480,9 +646,54 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 syncNotification()
             } catch (e: Exception) {
-                _ui.value = _ui.value.copy(loading = false, error = friendly(e))
+                if (canQueue(e)) offlineRefresh() else {
+                    _ui.value = _ui.value.copy(loading = false, error = friendly(e))
+                }
             }
         }
+    }
+
+    /** The queued starts still running, as the timer screen wants to see them. */
+    private fun queuedActives(activities: List<Activity>): List<TimesheetActive> =
+        queue.running
+            .sortedBy { it.beginIso }
+            .map { it.asEntry(prefs.projectId).asActive(activities) }
+
+    /**
+     * The timer screen with no server behind it.
+     *
+     * What was running when the server was last heard from is still running now
+     * — unless it was stopped into the queue since — and whatever was started
+     * offline runs alongside it. The activity list is the one already on the
+     * device, which is what a queued start has to be chosen from.
+     */
+    private suspend fun offlineRefresh() {
+        val snap = cache.snapshot()
+        val stopped = queue.stops.map { it.entryId }.toSet()
+        val acts = snap.activities.filter { it.visible }.sortedBy { it.name.lowercase() }
+        val stillRunning = snap.entries
+            .filter { it.end == null && it.id !in stopped }
+            .sortedBy { parseKimaiMillis(it.begin) ?: 0L }
+            .map { it.asActive(acts) }
+        val actives = stillRunning + queuedActives(acts)
+        val recent = snap.entries
+            .sortedByDescending { parseKimaiMillis(it.begin) ?: 0L }
+            .distinctBy { it.activity }
+            .take(8)
+            .map { it.asActive(acts) }
+        _ui.value = _ui.value.copy(
+            loading = false,
+            offline = true,
+            error = null,
+            running = actives.getOrNull(0),
+            second = actives.getOrNull(1),
+            activities = acts.ifEmpty { _ui.value.activities },
+            recent = recent.ifEmpty { _ui.value.recent },
+            allTags = _ui.value.allTags.ifEmpty {
+                snap.entries.flatMap { it.tags.orEmpty() }.filter { it.isNotBlank() }.distinct()
+            },
+        )
+        syncNotification()
     }
 
     fun openPicker() { _ui.value = _ui.value.copy(showPickDialog = true, error = null) }
@@ -568,15 +779,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value = _ui.value.copy(busy = true, showPickDialog = false, error = null)
         viewModelScope.launch {
             try {
-                val begin = LocalDateTime.now().format(beginFormat)
-                api().createTimesheet(
-                    TimesheetCreate(
-                        begin = begin,
-                        project = prefs.projectId,
-                        activity = activityId,
-                        description = description?.ifBlank { null },
-                        tags = tags?.ifBlank { null },
-                    )
+                openEntry(
+                    activityId = activityId,
+                    beginIso = LocalDateTime.now().format(beginFormat),
+                    tags = tags?.ifBlank { null },
+                    description = description?.ifBlank { null },
                 )
                 _ui.value = _ui.value.copy(busy = false)
                 refresh()
@@ -592,6 +799,44 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(busy = false, error = message)
             }
         }
+    }
+
+    /**
+     * Open a timesheet entry and hand back its id — from the server when it
+     * answers, from the queue when it doesn't. A queued id is negative.
+     *
+     * Once the server is known to be gone, the attempt is skipped outright
+     * rather than making the user sit through another connection timeout for a
+     * start that is going to be queued anyway. The ceiling of two concurrent
+     * timers is kept on this side too, so what the queue eventually hands over
+     * is something the server would have accepted at the time.
+     */
+    private suspend fun openEntry(
+        activityId: Int,
+        beginIso: String,
+        tags: String?,
+        description: String?,
+    ): Int {
+        if (!_ui.value.offline || prefs.serverless) {
+            try {
+                return api().createTimesheet(
+                    TimesheetCreate(
+                        begin = beginIso,
+                        project = prefs.projectId,
+                        activity = activityId,
+                        description = description,
+                        tags = tags,
+                    )
+                ).id
+            } catch (e: Exception) {
+                if (!canQueue(e)) throw e
+            }
+        }
+        check(listOfNotNull(_ui.value.running, _ui.value.second).size < MAX_TIMERS) {
+            "Two timers are already running. Stop one first."
+        }
+        return pending.addStart(activityId, beginIso, tags, description).localId
+            .also { readQueue() }
     }
 
     /** Mirror the running timers onto the lock screen (or clear it when idle). */
@@ -617,22 +862,71 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun stopEntry(id: Int) {
         _ui.value = _ui.value.copy(busy = true, error = null, showStopChoice = false)
         viewModelScope.launch {
+            val begin = listOfNotNull(_ui.value.running, _ui.value.second)
+                .firstOrNull { it.id == id }?.begin
+            // A queued start has nothing to stop on the server; it just ends.
+            if (isQueued(id)) {
+                pending.endStart(id, formatKimai(LocalDateTime.now()))
+                settleStop(id)
+                return@launch
+            }
+            if (_ui.value.offline && !prefs.serverless) {
+                if (queueStop(id, begin)) settleStop(id)
+                return@launch
+            }
             try {
                 api().stop(id)
-                val s = _ui.value
-                // Promote the survivor so the UI settles before the refresh lands.
-                val remaining = listOfNotNull(s.running, s.second).filter { it.id != id }
-                _ui.value = s.copy(
-                    busy = false,
-                    running = remaining.getOrNull(0),
-                    second = remaining.getOrNull(1),
-                )
-                syncNotification()
-                refresh()
+                settleStop(id)
             } catch (e: Exception) {
+                if (canQueue(e)) {
+                    if (queueStop(id, begin)) settleStop(id)
+                    return@launch
+                }
                 _ui.value = _ui.value.copy(busy = false, error = friendly(e))
             }
         }
+    }
+
+    /**
+     * Stop a server entry on the device alone. The stop is remembered with the
+     * instant it happened, not replayed later as "stop it now", so the entry
+     * lands with the length it really had.
+     *
+     * False when it couldn't be queued: Kimai's PATCH insists on being given a
+     * begin, and that can only come from the entry itself.
+     */
+    private suspend fun queueStop(id: Int, beginIso: String?, description: String? = null): Boolean {
+        if (beginIso == null) {
+            _ui.value = _ui.value.copy(
+                busy = false,
+                error = "Can't stop this offline — reconnect and try again.",
+            )
+            return false
+        }
+        pending.addStop(
+            PendingStop(
+                entryId = id,
+                beginIso = formatKimai(parseKimaiLocal(beginIso) ?: LocalDateTime.now()),
+                endIso = formatKimai(LocalDateTime.now()),
+                description = description,
+            )
+        )
+        return true
+    }
+
+    /** Take the stopped timer off the screen, then reload behind it. */
+    private suspend fun settleStop(id: Int) {
+        readQueue()
+        val s = _ui.value
+        // Promote the survivor so the UI settles before the refresh lands.
+        val remaining = listOfNotNull(s.running, s.second).filter { it.id != id }
+        _ui.value = s.copy(
+            busy = false,
+            running = remaining.getOrNull(0),
+            second = remaining.getOrNull(1),
+        )
+        syncNotification()
+        refresh()
     }
 
     fun createActivity(name: String) {
@@ -696,7 +990,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sessionSettings = prefs.pomodoroSessionSettings,
             startMs = prefs.pomodoroStartMs,
             skew = prefs.pomodoroSkew,
-            entryId = prefs.pomodoroEntryId.takeIf { it >= 0 },
+            entryId = prefs.pomodoroEntryId.takeIf { it != NO_ENTRY },
             activityName = prefs.pomodoroActivityName,
         )
         // An alarm may have been missed while the app was dead; re-arm the next.
@@ -704,6 +998,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (prefs.pomodoroStartMs > 0L) PomodoroAlarm.scheduleNext(ctx)
         else PomodoroAlarm.cancel(ctx)
         viewModelScope.launch {
+            syncQueue()
             try {
                 val acts = api().activities().filter { it.visible }.sortedBy { it.name.lowercase() }
                 val today = LocalDate.now()
@@ -712,15 +1007,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     end = formatKimai(today.plusDays(1).atStartOfDay()),
                 )
                 // The session may have been stopped elsewhere (the timer screen,
-                // Kimai itself); don't keep showing a clock for a dead entry.
+                // Kimai itself); don't keep showing a clock for a dead entry. A
+                // queued session is only the queue's to answer for.
                 val id = _pomodoro.value.entryId
-                if (id != null && api().active().none { it.id == id }) clearPomodoroSession()
+                val alive = when {
+                    id == null -> true
+                    isQueued(id) -> queue.running.any { it.localId == id }
+                    else -> api().active().any { it.id == id }
+                }
+                if (!alive) clearPomodoroSession()
                 _pomodoro.value = _pomodoro.value.copy(
                     loading = false,
                     activities = productiveActivities(acts, history),
                 )
             } catch (e: Exception) {
-                _pomodoro.value = _pomodoro.value.copy(loading = false, error = friendly(e))
+                if (!canQueue(e)) {
+                    _pomodoro.value = _pomodoro.value.copy(loading = false, error = friendly(e))
+                    return@launch
+                }
+                // Offline: a pomodoro can still be started, so the picker is
+                // filled from what the device already knows.
+                val snap = cache.snapshot()
+                _pomodoro.value = _pomodoro.value.copy(
+                    loading = false, error = null,
+                    activities = productiveActivities(
+                        snap.activities.filter { it.visible }.sortedBy { it.name.lowercase() },
+                        snap.entries,
+                    ).ifEmpty { _pomodoro.value.activities },
+                )
             }
         }
     }
@@ -788,18 +1102,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val begin = LocalDateTime.now()
                 val beginIso = begin.format(beginFormat)
-                val created = api().createTimesheet(
-                    TimesheetCreate(
-                        begin = beginIso,
-                        project = prefs.projectId,
-                        activity = activityId,
-                        description = null,
-                        tags = (prefs.tagFor(activityId)?.ifBlank { null } ?: PRODUCTIVE_TAG),
-                    )
+                val entryId = openEntry(
+                    activityId = activityId,
+                    beginIso = beginIso,
+                    tags = (prefs.tagFor(activityId)?.ifBlank { null } ?: PRODUCTIVE_TAG),
+                    description = null,
                 )
                 val startMs = begin.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
                 prefs.pomodoroStartMs = startMs
-                prefs.pomodoroEntryId = created.id
+                prefs.pomodoroEntryId = entryId
                 prefs.pomodoroActivityId = activityId
                 prefs.pomodoroActivityName = name
                 prefs.pomodoroBeginIso = beginIso
@@ -807,7 +1118,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 prefs.pomodoroSkew = 0L
                 prefs.pomodoroSkips = emptyMap()
                 _pomodoro.value = _pomodoro.value.copy(
-                    busy = false, startMs = startMs, skew = 0L, entryId = created.id,
+                    busy = false, startMs = startMs, skew = 0L, entryId = entryId,
                     sessionSettings = prefs.pomodoroSessionSettings,
                     activityName = name, alert = null,
                 )
@@ -833,27 +1144,43 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val entryId = s.entryId ?: return
         _pomodoro.value = s.copy(busy = true, error = null)
         viewModelScope.launch {
+            val summary = sessionSummary(
+                s.startMs, System.currentTimeMillis(), s.sessionSettings, prefs.pomodoroSkips,
+            )
+            val beginIso = prefs.pomodoroBeginIso.ifBlank { formatKimai(LocalDateTime.now()) }
+            // A queued session never reached the server; it simply ends, and
+            // carries its breakdown along when the queue is finally sent.
+            if (isQueued(entryId)) {
+                pending.endStart(entryId, formatKimai(LocalDateTime.now()), summary)
+                finishPomodoro()
+                return@launch
+            }
+            if (_ui.value.offline && !prefs.serverless) {
+                if (queueStop(entryId, beginIso, summary)) finishPomodoro()
+                return@launch
+            }
             try {
-                val summary = sessionSummary(
-                    s.startMs, System.currentTimeMillis(), s.sessionSettings, prefs.pomodoroSkips,
-                )
                 api().updateTimesheet(
                     entryId,
-                    TimesheetUpdate(
-                        begin = prefs.pomodoroBeginIso.ifBlank {
-                            formatKimai(LocalDateTime.now())
-                        },
-                        description = summary,
-                    ),
+                    TimesheetUpdate(begin = beginIso, description = summary),
                 )
                 api().stop(entryId)
-                clearPomodoroSession()
-                _pomodoro.value = _pomodoro.value.copy(busy = false)
-                refresh()
+                finishPomodoro()
             } catch (e: Exception) {
+                if (canQueue(e)) {
+                    if (queueStop(entryId, beginIso, summary)) finishPomodoro()
+                    return@launch
+                }
                 _pomodoro.value = _pomodoro.value.copy(busy = false, error = friendly(e))
             }
         }
+    }
+
+    private suspend fun finishPomodoro() {
+        clearPomodoroSession()
+        _pomodoro.value = _pomodoro.value.copy(busy = false)
+        readQueue()
+        refresh()
     }
 
     private fun clearPomodoroSession() {
@@ -870,6 +1197,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadCalendar() {
         _calendar.value = _calendar.value.copy(loading = true, error = null)
         viewModelScope.launch {
+            syncQueue()
             val anchor = _calendar.value.anchor
             val from = anchor.minusDays(7).atStartOfDay()
             val to = anchor.plusDays(1).atStartOfDay()
@@ -880,7 +1208,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 cache.save(from, to, entries, acts)
                 _calendar.value = _calendar.value.copy(
-                    loading = false, entries = entries, activities = acts, cached = null,
+                    loading = false, entries = merged(entries, from, to),
+                    activities = acts, cached = null,
                 )
             } catch (e: Exception) {
                 val saved = fallback(e)
@@ -889,7 +1218,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     _calendar.value.copy(
                         loading = false,
-                        entries = saved.first.between(from, to),
+                        entries = merged(saved.first.between(from, to), from, to),
                         activities = saved.first.activities,
                         cached = saved.second,
                     )
@@ -971,6 +1300,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         _tools.value = s.copy(computing = true, error = null)
         viewModelScope.launch {
+            syncQueue()
             val begin = from.atStartOfDay()
             val end = to.plusDays(1).atStartOfDay()
             try {
@@ -980,7 +1310,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 cache.save(begin, end, entries, emptyList())
                 _tools.value = _tools.value.copy(
                     computing = false, cached = null,
-                    freqResult = summarise(activityId, from, to, entries),
+                    freqResult = summarise(
+                        activityId, from, to, merged(entries, begin, end),
+                    ),
                 )
             } catch (e: Exception) {
                 val saved = fallback(e)
@@ -990,7 +1322,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _tools.value.copy(
                         computing = false, cached = saved.second,
                         freqResult = summarise(
-                            activityId, from, to, saved.first.between(begin, end),
+                            activityId, from, to,
+                            merged(saved.first.between(begin, end), begin, end),
                         ),
                     )
                 }
@@ -1293,6 +1626,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadViz() {
         _viz.value = _viz.value.copy(loading = true, error = null)
         viewModelScope.launch {
+            syncQueue()
             val today = LocalDate.now()
             val (pieFrom, pieTo) = pieRange(_viz.value.period, _viz.value.pieOffset, today)
             val pieBegin = pieFrom.atStartOfDay()
@@ -1310,7 +1644,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 cache.save(pieBegin, pieEnd, pie, acts)
                 cache.save(barBegin, end, bar, acts)
                 _viz.value = _viz.value.copy(
-                    loading = false, pieEntries = pie, barEntries = bar,
+                    loading = false,
+                    pieEntries = merged(pie, pieBegin, pieEnd),
+                    barEntries = merged(bar, barBegin, end),
                     activities = acts, cached = null,
                 )
             } catch (e: Exception) {
@@ -1320,8 +1656,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     _viz.value.copy(
                         loading = false,
-                        pieEntries = saved.first.between(pieBegin, pieEnd),
-                        barEntries = saved.first.between(barBegin, end),
+                        pieEntries = merged(
+                            saved.first.between(pieBegin, pieEnd), pieBegin, pieEnd,
+                        ),
+                        barEntries = merged(
+                            saved.first.between(barBegin, end), barBegin, end,
+                        ),
                         activities = saved.first.activities,
                         cached = saved.second,
                     )
@@ -1335,6 +1675,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadSheet() {
         _sheet.value = _sheet.value.copy(loading = true, error = null)
         viewModelScope.launch {
+            syncQueue()
             val today = LocalDate.now()
             val begin = today.minusDays(365).atStartOfDay()
             val end = today.plusDays(1).atStartOfDay()
@@ -1347,17 +1688,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val tags = try { api().tags() } catch (e: Exception) { _sheet.value.allTags }
                 cache.save(begin, end, entries, acts)
                 _sheet.value = _sheet.value.copy(
-                    loading = false, entries = entries, activities = acts,
+                    loading = false, offline = false,
+                    entries = merged(entries, begin, end), activities = acts,
                     colorChoices = colors, allTags = tags, cached = null,
                 )
             } catch (e: Exception) {
                 val saved = fallback(e)
                 _sheet.value = if (saved == null) {
-                    _sheet.value.copy(loading = false, error = friendly(e))
+                    _sheet.value.copy(
+                        loading = false, offline = canQueue(e), error = friendly(e),
+                    )
                 } else {
                     _sheet.value.copy(
                         loading = false,
-                        entries = saved.first.between(begin, end),
+                        offline = canQueue(e),
+                        entries = merged(saved.first.between(begin, end), begin, end),
                         activities = saved.first.activities,
                         cached = saved.second,
                     )
@@ -1383,6 +1728,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val wasRunning = _sheet.value.entries.firstOrNull { it.id == entryId }?.end == null
         _sheet.value = _sheet.value.copy(deleting = true, error = null)
         viewModelScope.launch {
+            // A queued entry only ever existed here, so dropping it is the whole
+            // of the deletion — there is nothing to tell the server about.
+            if (isQueued(entryId)) {
+                pending.removeStart(entryId)
+                readQueue()
+                _sheet.value = _sheet.value.copy(
+                    deleting = false,
+                    pendingDelete = null,
+                    entries = _sheet.value.entries.filterNot { it.id == entryId },
+                )
+                loadSheet()
+                if (wasRunning) refresh()
+                return@launch
+            }
             try {
                 api().deleteTimesheet(entryId)
                 cache.remove(entryId)
@@ -1478,6 +1837,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ) {
         _sheet.value = _sheet.value.copy(saving = true, error = null)
         viewModelScope.launch {
+            // A queued entry is edited in the queue: its times are the only
+            // thing about it that can be changed before it is sent.
+            if (isQueued(entryId)) {
+                pending.retime(entryId, beginIso, endIso)
+                readQueue()
+                _sheet.value = _sheet.value.copy(saving = false, editing = null)
+                loadSheet()
+                refresh()
+                return@launch
+            }
             try {
                 if (newColor != null) {
                     api().updateActivityColor(activityId, ActivityColorUpdate(color = newColor))

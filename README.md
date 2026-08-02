@@ -52,7 +52,7 @@ Turning it on for an install that *had* a server keeps that server's cached data
    - **Theme** — pick an accent now or change it later (see [Theme](#theme))
    - Tap **Connect**, then choose a **customer** and **project**. Both are remembered.
 
-Setup is reachable again at any time from the gear icon on the Timer screen; the theme picker lives in the same place.
+Setup is reachable again at any time from the gear icon on the Timer screen; the theme picker lives in the same place. Applying a colour there closes it again — reconnecting is not part of changing your theme.
 
 > **Build note:** the Android Gradle Plugin needs **JDK 17–21**. A newer JDK (Java 25, say) will fail. Point `JAVA_HOME` or `org.gradle.java.home` at a JDK 21 install if your system default is newer.
 
@@ -113,7 +113,7 @@ by all this: it reports each activity's own time, overlaps and all.
 Every entry, newest first.
 
 - **Filter** by activity, by tag (including *untagged*), and by day/week/month/year or a custom range.
-- **Tap to edit** — start, end (as a time or a duration), description, tags, and the activity's colour.
+- **Tap to edit** — start, end (as a time or a duration), description, tags, and the activity's colour. With no server reachable, only queued entries can be changed, and only their times; see [the signal queue](#the-signal-queue).
 - **Swipe left to delete**, which parks a Delete button open; tapping it asks for confirmation. Three deliberate steps, because deletions are not recoverable from the app.
 
 ### Calendar
@@ -138,19 +138,41 @@ A week-view grid of entries laid out against the clock.
 Everything accented in the app is drawn from a single colour, chosen in setup:
 
 - **Green, Red, Blue** presets, or
-- an **RGB picker** for anything else.
+- **hue, saturation and brightness** sliders for anything else. Each track is painted in the colours it would produce — the hue strip is a rainbow, the brightness strip runs from black to the colour at full light — so the sliders show the choice rather than describing it.
 
-A colour too close to the near-black background is **refused**, not applied: the candidate must clear a **3:1 WCAG contrast ratio** against both the background and the surface used for dialogs. The current ratio is shown live under the sliders.
+**Nothing is applied until you press *Use this colour*.** Tapping a preset only moves the sliders onto it; pressing the button applies the colour *and closes settings*, returning you to where you were rather than through the connection flow. Backing out with the system gesture leaves without changing anything.
+
+A colour too close to the near-black background is **refused**, not applied: the candidate must clear a **2:1 contrast ratio** against both the background and the surface used for dialogs. The current ratio is shown live above the button.
 
 The **stop button and running-timer red are deliberately exempt** — a live timer has to read the same whatever accent is set.
+
+> The launcher icon is a static resource per hue, switched to the nearest one. Android tears down the app's task when that switch happens, so it is deferred until the app is next put in the background — where the same work is invisible.
 
 ---
 
 ## Offline behaviour
 
-*Server mode only.* Timesheet, calendar, visualisation and tool data is cached on the device after each successful load. When the server can't be reached, those screens render the cached copy behind an amber banner saying how old it is and why. Starting and stopping timers still needs the server.
+*Server mode only.* Timesheet, calendar, visualisation and tool data is cached on the device after each successful load — as are the timers that were running the last time the server answered. When the server can't be reached, those screens render the cached copy behind an amber banner saying how old it is and why.
 
-Local-only mode has nothing to be offline from: every screen reads the device, and the banner never appears.
+### The signal queue
+
+**Timing does not stop when the server does.** Two actions — and only two — are written to a queue on the device and replayed the next time the server answers:
+
+1. **Stopping** a running activity, at the moment you stopped it. It is remembered with that instant, not replayed later as "stop it now", so the entry lands with the length it really had.
+2. **Starting** one (or two) activities, chosen from the list already on the device. The same ceiling of two concurrent timers applies, so what the queue hands over is something the server would have accepted at the time.
+
+A queued entry is a real entry everywhere it matters: it shows on the **timesheet** marked **QUEUED** in amber, and it counts in the **visualisations** and the **frequency calculator** exactly as a server entry does. The Timer screen says how many changes are waiting.
+
+Stops are sent before starts, since freeing a running entry is what makes room for a queued start under Kimai's limit. A server that is merely still absent leaves the queue untouched; anything the server actively refuses is surfaced, because such a signal will never leave on its own.
+
+**Everything else is unchanged and still needs the server.** Batch edit, and editing or deleting entries the server already knows about, behave exactly as they did — which offline means they fail. The two exceptions concern queued entries only:
+
+- a queued entry's **times can be changed**, and it can be **deleted** — deleting it is the whole of the deletion, since the server was never told about it;
+- **no tags, colours or activity names can be edited while offline**, on any entry, queued or not. Those belong to the server, and a queued entry has none of its own to change yet.
+
+A pomodoro started offline works the same way: the session is tracked against a queued entry, and the period breakdown written when you stop it rides along with it.
+
+Local-only mode has nothing to be offline from, and nothing to queue: every screen reads the device, the banner never appears.
 
 ---
 
@@ -176,6 +198,7 @@ app/src/main/java/com/fizaan/timetracker/
 │   ├── Models.kt          # API data classes
 │   ├── Prefs.kt           # SharedPreferences wrapper
 │   ├── TimesheetCache.kt  # Offline snapshot of the last good load
+│   ├── PendingQueue.kt    # Signals taken with no server, and their replay
 │   ├── LocalStore.kt      # The database of a local-only install
 │   └── LocalApi.kt        # KimaiApi implemented against LocalStore
 ├── pomodoro/
@@ -198,13 +221,14 @@ app/src/main/java/com/fizaan/timetracker/
 ```
 
 `app/src/test/` holds JVM unit tests for the pure logic — currently the overlap
-rules. Run them with `./gradlew test`.
+rules and the queue's merge arithmetic. Run them with `./gradlew test`.
 
 ## Notes and limitations
 
 - **Single project.** Everything is scoped to the one project chosen at setup (local-only mode has exactly one).
 - **Two timers at once**, in both modes — the local store enforces the same ceiling Kimai does. Where they overlap, the Productivity pie credits only one of them; see above.
-- **Kimai rounds to the minute** (begin down, end up), so a summary's elapsed total can differ from an entry's stored duration by up to a minute.
+- **Kimai rounds to the minute** (begin down, end up), so a summary's elapsed total can differ from an entry's stored duration by up to a minute — including when a queued signal is finally sent.
+- **A queued stop needs the entry's own start**, which the app only has for timers it saw running. One started on another device during an outage can't be stopped from this one until it reconnects.
 - The app is **dark only** — the system light/dark setting is ignored.
 - Auto Backup is on, which means the API token can be included in a Google account backup. Turn `android:allowBackup` off in the manifest if that matters to you.
 

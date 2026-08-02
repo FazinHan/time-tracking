@@ -99,6 +99,32 @@ class TimesheetCache(context: Context) {
         )
     }
 
+    /**
+     * Fold a handful of entries in without clearing a window around them.
+     *
+     * The running timers are read on their own, outside any date range, and
+     * they are exactly what the app must not forget if the server disappears a
+     * moment later — so they are upserted rather than treated as a complete
+     * answer for some span of time.
+     */
+    suspend fun remember(
+        entries: List<TimesheetEntry>,
+        activities: List<Activity>,
+    ) = mutex.withLock {
+        val current = loadLocked()
+        if (entries.isEmpty() && activities.isEmpty()) return@withLock
+        val merged = (entries + current.entries)
+            .distinctBy { it.id }
+            .sortedBy { parseKimaiMillis(it.begin) ?: 0L }
+        writeLocked(
+            CacheSnapshot(
+                entries = merged,
+                activities = activities.ifEmpty { current.activities },
+                lastSync = System.currentTimeMillis(),
+            )
+        )
+    }
+
     /** Forget a deleted entry, so an offline screen can't resurrect it. */
     suspend fun remove(entryId: Int) = mutex.withLock {
         val current = loadLocked()
