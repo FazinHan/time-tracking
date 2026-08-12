@@ -30,9 +30,11 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
@@ -76,7 +78,6 @@ fun MainScreen(
     onStartTap: () -> Unit,
     onStopTap: () -> Unit,
     onPickActivity: (Int) -> Unit,
-    onResume: (TimesheetActive) -> Unit,
     onDismissPicker: () -> Unit,
     onOpenCreate: () -> Unit,
     onDismissCreate: () -> Unit,
@@ -199,7 +200,6 @@ fun MainScreen(
         ActivityPickerDialog(
             state = state,
             onPick = onPickActivity,
-            onResume = onResume,
             onEditTag = onEditTag,
             onCreate = onOpenCreate,
             onDismiss = onDismissPicker,
@@ -452,52 +452,60 @@ private fun parseBeginMillis(iso: String?): Long? {
 private fun ActivityPickerDialog(
     state: UiState,
     onPick: (Int) -> Unit,
-    onResume: (TimesheetActive) -> Unit,
     onEditTag: (Int) -> Unit,
     onCreate: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    // Recent activities to resume, de-duplicated by activity (keeping most recent).
-    val recent = remember(state.recent) {
-        state.recent
-            .filter { it.activity != null }
-            .distinctBy { it.activity?.id }
-            .take(5)
+    var query by remember { mutableStateOf("") }
+    // Substring, case-insensitive: the list is short enough that anything
+    // cleverer would only get in the way of typing three letters.
+    val shown = remember(state.activities, query) {
+        val needle = query.trim()
+        if (needle.isEmpty()) state.activities
+        else state.activities.filter { it.name.contains(needle, ignoreCase = true) }
     }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Start activity") },
         text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                if (recent.isNotEmpty()) {
-                    SectionLabel("Recent — tap to resume · long-press to tag")
-                    recent.forEach { item ->
-                        RecentRow(
-                            item = item,
-                            onClick = { onResume(item) },
-                            onLongClick = { item.activity?.id?.let(onEditTag) },
+            Column {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text("Search activities") },
+                    leadingIcon = { Icon(Icons.Filled.Search, null) },
+                    trailingIcon = {
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(Icons.Filled.Close, "Clear")
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(12.dp))
+                SectionLabel("Tap to start · long-press to tag")
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    if (state.activities.isEmpty()) {
+                        Text("No activities yet. Create one below.")
+                    } else if (shown.isEmpty()) {
+                        Text("Nothing matches “${query.trim()}”.")
+                    }
+                    shown.forEach { act ->
+                        Text(
+                            text = act.name,
+                            fontSize = 18.sp,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    onClick = { onPick(act.id) },
+                                    onLongClick = { onEditTag(act.id) },
+                                )
+                                .padding(vertical = 14.dp),
                         )
                         Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
                     }
-                    Spacer(Modifier.height(16.dp))
-                    SectionLabel("All activities — tap to start · long-press to tag")
-                }
-                if (state.activities.isEmpty()) {
-                    Text("No activities yet. Create one below.")
-                }
-                state.activities.forEach { act ->
-                    Text(
-                        text = act.name,
-                        fontSize = 18.sp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .combinedClickable(
-                                onClick = { onPick(act.id) },
-                                onLongClick = { onEditTag(act.id) },
-                            )
-                            .padding(vertical = 14.dp),
-                    )
-                    Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f))
                 }
             }
         },
@@ -512,49 +520,6 @@ private fun ActivityPickerDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
-}
-
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        fontSize = 12.sp,
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-        modifier = Modifier.padding(top = 4.dp, bottom = 6.dp),
-    )
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun RecentRow(item: TimesheetActive, onClick: () -> Unit, onLongClick: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(vertical = 12.dp),
-    ) {
-        Text(
-            text = item.activity?.name ?: "activity",
-            fontSize = 18.sp,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        val desc = item.description?.takeIf { it.isNotBlank() }
-        if (desc != null) {
-            Text(
-                text = desc,
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            )
-        }
-        val tags = item.tags?.filter { it.isNotBlank() }.orEmpty()
-        if (tags.isNotEmpty()) {
-            Text(
-                text = tags.joinToString(" · "),
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-    }
 }
 
 /**

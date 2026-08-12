@@ -3,7 +3,18 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!--
+        The same play glyph the main screen draws, at the same physical size.
+
+        Android's launch screen puts this drawable in a 240dp box and shows the
+        middle 160dp of it, so one unit here is 2.222dp on screen. The button in
+        the app is Material's PlayArrow at 110dp, whose triangle measures
+        50.4 x 64.2dp — 22.7 x 28.9 units at this scale — and sits a little right
+        of centre, because the glyph's bounding box is off-centre in its own box.
+        Reproduced exactly, so opening the app doesn't change the size of the
+        thing you were just looking at.
+    -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M44,38 L44,70 L72,54 Z" />
+        android:pathData="M45.75,39.56 L45.75,68.44 L68.44,54 Z" />
 </vector>

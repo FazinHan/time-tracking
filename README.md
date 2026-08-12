@@ -68,8 +68,8 @@ The home screen: one big button.
 
 - **Tap to start** — pick an activity from the project. **Tap again to stop.**
 - **Two at once.** A second activity can run alongside the first; the earlier one keeps the big clock and the later one is listed under it. Stopping with two running asks which to stop.
-- **Tags are remembered per activity.** The first time you start an activity it asks which tags to attach; every later start reuses them silently. The tag row on the picker re-opens that prompt.
-- **Resume** a recent entry from the list below the button, carrying its description and tags over.
+- **Tags are remembered per activity.** The first time you start an activity it asks which tags to attach; every later start reuses them silently. Long-pressing a name in the picker re-opens that prompt.
+- **Search** the picker to find an activity by name once the list gets long.
 - **Create an activity** in-app with the **+** button — no need to go to the web UI.
 - A running timer posts an **ongoing notification** that shows on the lock screen and ticks by itself, even if the app is killed. It disappears when the last timer stops.
 
@@ -121,14 +121,19 @@ Every entry, newest first.
 A week-view grid of entries laid out against the clock.
 
 - **Three days** in portrait, **seven** in landscape.
-- Opens at **07:00** rather than midnight; the small hours are a scroll away.
+- A **red rule with an arrow at its left edge** crosses today's column at the current time, and the grid opens scrolled to it — the line an hour or so below the top edge. With today off screen it opens at **07:00** instead, so the small hours are a scroll away.
 - Arrows page day by day, and a button returns to today.
 
 ### Tools
 
-- **Frequency** — for one activity over a date range: how many sessions, total time, and how often that works out per day/week/month/year, plus a full-year projection of the time. Rates divide by the **whole range**, empty days included, so they read as a rate rather than an intensity: a fortnight off pulls the average down. The number of days that did have sessions is reported alongside, as context.
+- **Frequency** — for one activity over a date range: how many sessions, how much time, and how both work out per day/week/month/year, plus a full-year projection of the time. Rates divide by the **whole range**, empty days included, so they read as a rate rather than an intensity: a fortnight off pulls the average down. The number of days that did have sessions is reported alongside, as context.
+  - A period the range is **too short to average** — a monthly figure from a fortnight, a yearly one from anything under a year — reports the **time logged so far** instead, marked as such, rather than multiplying a small window up into a number that isn't true.
+  - Long spans are written in **days, hours and minutes**: twelve and a half days is a length of time in a way that 300 hours isn't.
   - Under **30 days of data** — counted from the activity's first session in the range, since anything earlier is a period we know nothing about — the result carries a note saying the rates may be well off. Ranges with no sessions at all say so outright.
 - **Batch edit** — narrow entries down by activity, tag, duration and date range, then apply one action to all of them: rename the activity, move them to another activity, set tags, set a colour, or delete. Deletion asks twice.
+- **Export** — a date range as **CSV**, **Excel**, **PDF**, or straight to the **system print dialog**. Files land in **Downloads**; printing keeps no file. Server-backed installs only.
+  - The files are written **on the device** from the entries the app holds, not fetched from Kimai. Kimai's own export is a page of its web dashboard, reachable only with a browser login session — an API token cannot get at it — so the columns here match what the app knows (date, times, duration, decimal hours, customer, project, activity, description, tags) and the layout is this app's.
+  - Anything still sitting in [the signal queue](#the-signal-queue) is included, with a warning saying so: until it is sent, the export won't match what Kimai holds.
 - **Storage** — how much the offline cache is holding, or, local-only, how big the database itself has grown.
 
 ---
@@ -147,6 +152,8 @@ A colour too close to the near-black background is **refused**, not applied: the
 The **stop button and running-timer red are deliberately exempt** — a live timer has to read the same whatever accent is set.
 
 > The launcher icon is a static resource per hue, switched to the nearest one. Android tears down the app's task when that switch happens, so it is deferred until the app is next put in the background — where the same work is invisible.
+
+> The play glyph inside the icon is sized to come out at exactly the size of the button on the Timer screen when Android draws it on the launch screen, so opening the app doesn't change the size of the thing you were just looking at. Android fixes the launch-screen circle at 160dp against the button's 220dp, so the two circles differ; the glyphs don't.
 
 ---
 
@@ -201,6 +208,11 @@ app/src/main/java/com/fizaan/timetracker/
 │   ├── PendingQueue.kt    # Signals taken with no server, and their replay
 │   ├── LocalStore.kt      # The database of a local-only install
 │   └── LocalApi.kt        # KimaiApi implemented against LocalStore
+├── export/
+│   ├── ExportModel.kt     # Formats, columns, entries flattened to rows (pure)
+│   ├── Writers.kt         # CSV and hand-written xlsx (pure)
+│   ├── PdfWriter.kt       # Paginated A4 table
+│   └── ExportStore.kt     # Saving to Downloads via MediaStore
 ├── pomodoro/
 │   ├── Pomodoro.kt        # Phase arithmetic and session summary (pure)
 │   └── PomodoroAlarm.kt   # Boundary alarm, receiver, full-screen alert
@@ -212,6 +224,7 @@ app/src/main/java/com/fizaan/timetracker/
 │   ├── CalendarScreen.kt  # Week-view grid
 │   ├── ToolsScreen.kt     # Frequency tool, storage
 │   ├── BatchTool.kt       # Batch edit
+│   ├── ExportTool.kt      # Export screen and the system print handoff
 │   ├── SetupScreen.kt     # Credentials, project, theme
 │   ├── Theme.kt           # Accent, contrast rules, colour scheme
 │   └── VizColors.kt       # Chart palette
@@ -221,7 +234,8 @@ app/src/main/java/com/fizaan/timetracker/
 ```
 
 `app/src/test/` holds JVM unit tests for the pure logic — currently the overlap
-rules and the queue's merge arithmetic. Run them with `./gradlew test`.
+rules, the queue's merge arithmetic, and the export writers (the xlsx is written
+by hand, so it is worth pinning down). Run them with `./gradlew test`.
 
 ## Notes and limitations
 
@@ -229,6 +243,7 @@ rules and the queue's merge arithmetic. Run them with `./gradlew test`.
 - **Two timers at once**, in both modes — the local store enforces the same ceiling Kimai does. Where they overlap, the Productivity pie credits only one of them; see above.
 - **Kimai rounds to the minute** (begin down, end up), so a summary's elapsed total can differ from an entry's stored duration by up to a minute — including when a queued signal is finally sent.
 - **A queued stop needs the entry's own start**, which the app only has for timers it saw running. One started on another device during an outage can't be stopped from this one until it reconnects.
+- **Exports are the app's own files, not Kimai's.** Kimai only exports from its web dashboard, behind a browser login the API token can't reach, so nothing produced here will be byte-for-byte what the dashboard gives you. Rates and billing, which the app never sees, are not in the columns.
 - The app is **dark only** — the system light/dark setting is ignored.
 - Auto Backup is on, which means the API token can be included in a Google account backup. Turn `android:allowBackup` off in the manifest if that matters to you.
 

@@ -1,6 +1,7 @@
 package com.fizaan.timetracker.ui
 
 import android.content.res.Configuration
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -32,12 +33,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -49,12 +54,21 @@ import com.fizaan.timetracker.CalendarState
 import com.fizaan.timetracker.data.Activity
 import com.fizaan.timetracker.data.TimesheetEntry
 import com.fizaan.timetracker.util.parseKimaiLocal
+import kotlinx.coroutines.delay
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
-/** The hour the grid is scrolled to when the screen opens. */
+/** The hour the grid is scrolled to when today isn't one of the days shown. */
 private const val DefaultTopHour = 7
+
+/** How far below the top of the view the now-line is parked when opening. */
+private const val NowLeadHours = 1.5f
+
+/** The right-pointing marker at the left end of the now-line. */
+private val NowArrowWidth = 7.dp
+private val NowArrowHeight = 11.dp
 
 /** One entry positioned within a single day, in minutes from midnight. */
 private data class DayBlock(
@@ -217,10 +231,28 @@ private fun CalendarGrid(
     val blocksByDay = remember(days, entries) {
         days.associateWith { day -> blocksForDay(entries, day) }
     }
-    // Open on the waking day: 07:00 sits at the top of the view, and the small
-    // hours are a scroll away rather than the first thing you see.
+
+    // The clock hand. Re-read every half minute so the line creeps down the day
+    // instead of freezing wherever the screen happened to open.
+    val today = LocalDate.now()
+    var nowMin by remember { mutableIntStateOf(minutesOfDay()) }
     LaunchedEffect(Unit) {
-        scroll.scrollTo(with(density) { (hourHeight * DefaultTopHour).toPx() }.toInt())
+        while (true) {
+            delay(30_000)
+            nowMin = minutesOfDay()
+        }
+    }
+
+    // Open where the day actually is: the now-line a little below the top edge,
+    // so the last hour or two is visible above it. With today off screen there
+    // is no line to aim at, and the waking hour is the next best thing.
+    val startAtToday = days.contains(today)
+    LaunchedEffect(Unit) {
+        val hours =
+            if (startAtToday) nowMin / 60f - NowLeadHours else DefaultTopHour.toFloat()
+        scroll.scrollTo(
+            with(density) { (hourHeight * hours.coerceAtLeast(0f)).toPx() }.toInt(),
+        )
     }
 
     val gridColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f)
@@ -250,6 +282,7 @@ private fun CalendarGrid(
                 hourHeight = hourHeight,
                 dayHeight = dayHeight,
                 gridColor = gridColor,
+                nowMin = nowMin.takeIf { day == today },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -263,6 +296,7 @@ private fun DayLane(
     hourHeight: Dp,
     dayHeight: Dp,
     gridColor: Color,
+    nowMin: Int?,
     modifier: Modifier = Modifier,
 ) {
     val timeFmt = remember { DateTimeFormatter.ofPattern("HH:mm") }
@@ -314,8 +348,42 @@ private fun DayLane(
                 }
             }
         }
+        // Last, so it crosses the blocks rather than hiding under them.
+        if (nowMin != null) NowLine(nowMin)
     }
 }
+
+/**
+ * Where the day has got to: a red rule across today's column, tipped with an
+ * arrow pointing into the day. Red for the same reason a running timer is —
+ * it is the one thing on this screen that is happening now, not recorded.
+ */
+@Composable
+private fun NowLine(nowMin: Int) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val y = size.height * (nowMin / 1440f)
+        val arrowW = NowArrowWidth.toPx()
+        val arrowH = NowArrowHeight.toPx()
+        drawLine(
+            color = StopRed,
+            start = Offset(arrowW, y),
+            end = Offset(size.width, y),
+            strokeWidth = 2.dp.toPx(),
+        )
+        drawPath(
+            path = Path().apply {
+                moveTo(0f, y - arrowH / 2f)
+                lineTo(arrowW, y)
+                lineTo(0f, y + arrowH / 2f)
+                close()
+            },
+            color = StopRed,
+        )
+    }
+}
+
+/** Wall-clock minutes since midnight, right now. */
+private fun minutesOfDay(): Int = LocalTime.now().let { it.hour * 60 + it.minute }
 
 private fun minToLabel(min: Int, fmt: DateTimeFormatter): String =
     LocalDateTime.of(2000, 1, 1, (min / 60).coerceIn(0, 23), (min % 60).coerceIn(0, 59)).format(fmt)

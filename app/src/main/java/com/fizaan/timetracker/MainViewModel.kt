@@ -28,6 +28,13 @@ import com.fizaan.timetracker.data.asActive
 import com.fizaan.timetracker.data.asEntry
 import com.fizaan.timetracker.data.isQueued
 import com.fizaan.timetracker.data.mergePending
+import com.fizaan.timetracker.export.ExportFormat
+import com.fizaan.timetracker.export.ExportRow
+import com.fizaan.timetracker.export.ExportStore
+import com.fizaan.timetracker.export.csvBytes
+import com.fizaan.timetracker.export.exportRows
+import com.fizaan.timetracker.export.writePdf
+import com.fizaan.timetracker.export.xlsxBytes
 import androidx.core.app.NotificationManagerCompat
 import com.fizaan.timetracker.pomodoro.ALERT_NOTIFICATION_ID
 import com.fizaan.timetracker.pomodoro.Phase
@@ -40,6 +47,7 @@ import com.fizaan.timetracker.ui.DefaultAccent
 import com.fizaan.timetracker.util.entryLocalDate
 import com.fizaan.timetracker.util.entrySeconds
 import com.fizaan.timetracker.util.epochMillis
+import com.fizaan.timetracker.util.formatDuration
 import com.fizaan.timetracker.util.formatKimai
 import com.fizaan.timetracker.util.parseKimaiLocal
 import com.fizaan.timetracker.util.parseKimaiMillis
@@ -212,7 +220,24 @@ data class BatchState(
     val done: String? = null,
 )
 
-/** Tools screen state. Currently hosts the frequency calculator. */
+/**
+ * Export tool. Kimai's own export lives behind a browser login the API token
+ * can't reach, so the files are written here from the same data every other
+ * screen is drawn from — which also means the tool is only offered where that
+ * data comes from a server at all.
+ */
+data class ExportState(
+    val from: LocalDate = LocalDate.now().withDayOfMonth(1),
+    val to: LocalDate = LocalDate.now(),
+    val format: ExportFormat = ExportFormat.CSV,
+    val running: Boolean = false,
+    /** Where the finished file went, for the confirmation line. */
+    val saved: String? = null,
+    /** A rendered document waiting to be handed to the system print dialog. */
+    val printFile: String? = null,
+)
+
+/** Tools screen state. Hosts the frequency calculator, batch edit and export. */
 data class ToolsState(
     val loading: Boolean = false,
     /** Local-only install: the stored data is the database, and it has no cap. */
@@ -222,6 +247,8 @@ data class ToolsState(
     val computing: Boolean = false,
     val cacheBytes: Long = 0L,
     val cacheEntries: Int = 0,
+    /** Queued signals the server hasn't been told about yet. */
+    val queued: Int = 0,
     val activities: List<Activity> = emptyList(),
     val freqActivityId: Int? = null,
     val freqFrom: LocalDate = LocalDate.now().minusDays(29),
@@ -230,6 +257,7 @@ data class ToolsState(
     val allTags: List<String> = emptyList(),
     val colorChoices: Map<String, String> = emptyMap(),
     val batch: BatchState = BatchState(),
+    val export: ExportState = ExportState(),
 )
 
 /**
@@ -711,16 +739,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             openTagDialog(activityId, startAfter = true)
         }
-    }
-
-    /** Resume a recent activity, carrying over its description and tags. */
-    fun resume(item: TimesheetActive) {
-        val activityId = item.activity?.id ?: return
-        val tags = item.tags?.filter { it.isNotBlank() }.orEmpty()
-        // Seed the on-device memory from a tagged entry, but don't let an
-        // untagged resume permanently suppress the first-time prompt.
-        if (tags.isNotEmpty()) prefs.setTag(activityId, tags.joinToString(","))
-        start(activityId, description = item.description, tags = tags.joinToString(",").ifBlank { null })
     }
 
     /**
@@ -1271,7 +1289,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val stats = if (prefs.serverless) localStore.stats() else cache.stats()
             _tools.value = _tools.value.copy(
                 cacheBytes = stats.bytes, cacheEntries = stats.entries,
-                serverless = prefs.serverless,
+                serverless = prefs.serverless, queued = queue.size,
             )
         }
     }
@@ -1361,6 +1379,93 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearToolsError() { _tools.value = _tools.value.copy(error = null) }
+
+    // ---------------- Export ----------------
+
+    private fun updateExport(block: (ExportState) -> ExportState) {
+        _tools.value = _tools.value.copy(export = block(_tools.value.export))
+    }
+
+    /** Any change to what would be exported drops the last result's message. */
+    fun setExportFrom(date: LocalDate) = updateExport { it.copy(from = date, saved = null) }
+    fun setExportTo(date: LocalDate) = updateExport { it.copy(to = date, saved = null) }
+    fun setExportFormat(format: ExportFormat) =
+        updateExport { it.copy(format = format, saved = null) }
+
+    /** The print dialog has been handed the document; stop offering it again. */
+    fun exportPrintHandled() = updateExport { it.copy(printFile = null) }
+
+    /**
+     * Write the chosen range out in the chosen format.
+     *
+     * The window is fetched the way every other tool fetches one — server
+     * first, the saved copy if it can't be reached — so an export made without
+     * a server holds exactly what the app could still show, queued entries
+     * included, rather than failing outright.
+     */
+    fun runExport() {
+        val s = _tools.value.export
+        if (s.to.isBefore(s.from)) {
+            _tools.value = _tools.value.copy(error = "End date is before the start date.")
+            return
+        }
+        updateExport { it.copy(running = true, saved = null, printFile = null) }
+        _tools.value = _tools.value.copy(error = null)
+        viewModelScope.launch {
+            syncQueue()
+            val begin = s.from.atStartOfDay()
+            val end = s.to.plusDays(1).atStartOfDay()
+            try {
+                val entries = try {
+                    val fresh = api().timesheets(
+                        begin = formatKimai(begin), end = formatKimai(end),
+                    )
+                    cache.save(begin, end, fresh, emptyList())
+                    _tools.value = _tools.value.copy(cached = null)
+                    merged(fresh, begin, end)
+                } catch (e: Exception) {
+                    val saved = fallback(e) ?: throw e
+                    _tools.value = _tools.value.copy(cached = saved.second)
+                    merged(saved.first.between(begin, end), begin, end)
+                }
+                val rows = exportRows(
+                    entries = entries,
+                    activities = _tools.value.activities.ifEmpty { cache.snapshot().activities },
+                    customer = prefs.customerName,
+                    project = prefs.projectName,
+                )
+                writeExport(s, rows)
+            } catch (e: Exception) {
+                updateExport { it.copy(running = false) }
+                _tools.value = _tools.value.copy(error = friendly(e))
+            }
+        }
+    }
+
+    /** Render [rows] and either save the file or stage it for the print dialog. */
+    private suspend fun writeExport(s: ExportState, rows: List<ExportRow>) {
+        val stamp = "${s.from}_${s.to}"
+        val name = "timesheet-$stamp.${s.format.extension}"
+        val title = prefs.projectName.ifBlank { "Timesheet" }
+        val subtitle = "${s.from} to ${s.to} · ${rows.size} " +
+            if (rows.size == 1) "entry" else "entries"
+        val total = "Total: " + formatDuration(rows.sumOf { (it.hours * 3600).toLong() })
+
+        val body: (java.io.OutputStream) -> Unit = when (s.format) {
+            ExportFormat.CSV -> ({ out -> out.write(csvBytes(rows)) })
+            ExportFormat.EXCEL -> ({ out -> out.write(xlsxBytes(rows)) })
+            ExportFormat.PDF, ExportFormat.PRINT ->
+                ({ out -> writePdf(rows, title, subtitle, total, out) })
+        }
+
+        if (s.format == ExportFormat.PRINT) {
+            val file = ExportStore.scratch(ctx, name, body)
+            updateExport { it.copy(running = false, printFile = file.absolutePath) }
+        } else {
+            val where = ExportStore.save(ctx, name, s.format.mime, body)
+            updateExport { it.copy(running = false, saved = where) }
+        }
+    }
 
     // ---------------- Batch edit ----------------
 

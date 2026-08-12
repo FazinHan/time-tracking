@@ -70,6 +70,17 @@ fun CacheBanner(info: CacheInfo?, modifier: Modifier = Modifier) {
     }
 }
 
+/** The small grey caption that names the group of controls under it. */
+@Composable
+fun SectionLabel(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        fontSize = 12.sp,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+        modifier = modifier.padding(bottom = 6.dp),
+    )
+}
+
 fun formatSavedAt(millis: Long): String =
     LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault())
         .format(savedAtFmt)

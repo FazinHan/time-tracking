@@ -63,3 +63,18 @@ fun formatDuration(seconds: Long): String {
         else -> "${m}m"
     }
 }
+
+/**
+ * The same label, but broken into days once there are any: "12d 13h 30m".
+ *
+ * For the figures the frequency tool projects, where hours run into the
+ * hundreds and stop meaning anything — 300 hours is a number, twelve and a half
+ * days is a length of time.
+ */
+fun formatLongDuration(seconds: Long): String {
+    val d = seconds / 86_400
+    if (d == 0L) return formatDuration(seconds)
+    val h = (seconds % 86_400) / 3600
+    val m = (seconds % 3600) / 60
+    return "${d}d ${h}h ${m.toString().padStart(2, '0')}m"
+}

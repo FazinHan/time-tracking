@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.CircularProgressIndicator
@@ -52,14 +53,16 @@ import com.fizaan.timetracker.CacheInfo
 import com.fizaan.timetracker.FreqResult
 import com.fizaan.timetracker.ToolsState
 import com.fizaan.timetracker.data.CACHE_MAX_BYTES
+import com.fizaan.timetracker.export.ExportFormat
 import com.fizaan.timetracker.util.formatDuration
+import com.fizaan.timetracker.util.formatLongDuration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 /** Which tool is currently open within the Tools section. */
-private enum class Tool { NONE, FREQUENCY, BATCH }
+private enum class Tool { NONE, FREQUENCY, BATCH, EXPORT }
 
 @Composable
 fun ToolsScreen(
@@ -69,6 +72,11 @@ fun ToolsScreen(
     onSetFreqFrom: (LocalDate) -> Unit,
     onSetFreqTo: (LocalDate) -> Unit,
     onCompute: () -> Unit,
+    onSetExportFrom: (LocalDate) -> Unit,
+    onSetExportTo: (LocalDate) -> Unit,
+    onSetExportFormat: (ExportFormat) -> Unit,
+    onExport: () -> Unit,
+    onPrintHandled: () -> Unit,
     onSetBatchActivity: (Int?) -> Unit,
     onSetBatchTag: (String?) -> Unit,
     onSetBatchMin: (String) -> Unit,
@@ -110,6 +118,7 @@ fun ToolsScreen(
                 text = when (tool) {
                     Tool.FREQUENCY -> "Frequency calculator"
                     Tool.BATCH -> "Batch edit"
+                    Tool.EXPORT -> "Export"
                     Tool.NONE -> "Tools"
                 },
                 color = MaterialTheme.colorScheme.onBackground,
@@ -126,6 +135,7 @@ fun ToolsScreen(
                     state = state,
                     onOpenFrequency = { tool = Tool.FREQUENCY },
                     onOpenBatch = { tool = Tool.BATCH },
+                    onOpenExport = { tool = Tool.EXPORT },
                 )
                 Tool.FREQUENCY -> FrequencyTool(
                     state = state,
@@ -147,6 +157,14 @@ fun ToolsScreen(
                     onAskActivityName = onAskBatchActivityName,
                     onConfirm = onConfirmBatch,
                     onDismiss = onDismissBatch,
+                )
+                Tool.EXPORT -> ExportTool(
+                    state = state,
+                    onSetFrom = onSetExportFrom,
+                    onSetTo = onSetExportTo,
+                    onSetFormat = onSetExportFormat,
+                    onExport = onExport,
+                    onPrintHandled = onPrintHandled,
                 )
             }
             if (state.loading || state.computing) {
@@ -176,6 +194,7 @@ private fun ToolList(
     state: ToolsState,
     onOpenFrequency: () -> Unit,
     onOpenBatch: () -> Unit,
+    onOpenExport: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         ToolCard(
@@ -191,6 +210,17 @@ private fun ToolList(
             icon = Icons.Filled.EditNote,
             onClick = onOpenBatch,
         )
+        // Local-only installs have no export: the feature exists because a
+        // server-backed timesheet is the thing people take elsewhere.
+        if (!state.serverless) {
+            Spacer(Modifier.height(12.dp))
+            ToolCard(
+                title = "Export",
+                subtitle = "A date range as CSV, Excel, PDF, or straight to print",
+                icon = Icons.Filled.Download,
+                onClick = onOpenExport,
+            )
+        }
         Spacer(Modifier.weight(1f))
         StorageFooter(state)
     }
@@ -336,6 +366,22 @@ private fun FrequencyTool(
     }
 }
 
+/**
+ * One line of the averages table: how often and how long, per period.
+ *
+ * [extrapolated] is false when the range is shorter than the period itself —
+ * a fortnight cannot say what a year looks like — and [time] is then simply
+ * everything logged so far, left as the honest answer rather than multiplied up
+ * into one that isn't.
+ */
+private data class FreqRow(
+    val label: String,
+    val days: Double,
+    val sessions: Double,
+    val timeSeconds: Long,
+    val extrapolated: Boolean,
+)
+
 @Composable
 private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
     // Every day of the range divides, including the empty ones, so these read
@@ -343,13 +389,28 @@ private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
     // lower the daily figure. The coarser rows are that same daily rate over a
     // week, an average month and a year.
     val span = r.spanDays.coerceAtLeast(1).toDouble()
-    val perDay = r.sessions / span
-    val rows = listOf(
-        "Daily" to perDay,
-        "Weekly" to perDay * 7,
-        "Monthly" to perDay * 30.44,
-        "Yearly" to perDay * 365.25,
-    )
+    // A period divides by its average length but is asked for in whole days:
+    // thirty days of range is a month's worth of evidence, and refusing to
+    // average it because a month is 30.44 days long would be pedantry.
+    val rows = remember(r) {
+        listOf(
+            Triple("Daily", 1.0, 1),
+            Triple("Weekly", 7.0, 7),
+            Triple("Monthly", 30.44, 30),
+            Triple("Yearly", 365.25, 365),
+        ).map { (label, days, minDays) ->
+            val enough = r.spanDays >= minDays
+            FreqRow(
+                label = label,
+                days = days,
+                sessions = r.sessions / span * days,
+                timeSeconds = if (enough) (r.totalSeconds / span * days).toLong()
+                else r.totalSeconds,
+                extrapolated = enough,
+            )
+        }
+    }
+    val partial = rows.filter { !it.extrapolated }
     // Time spent, projected to a full year over the selected span.
     val yearlySeconds = (r.totalSeconds * 365.25 / span).toLong()
     val yearShare = yearlySeconds / (365.25 * 24 * 3600) * 100.0
@@ -381,18 +442,38 @@ private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
         )
         Spacer(Modifier.height(12.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
-            HeaderCell("Average", 1f)
-            HeaderCell("Frequency", 1f)
+            HeaderCell("Average", 0.9f)
+            HeaderCell("Sessions", 0.8f)
+            HeaderCell("Time", 1.3f)
         }
         androidx.compose.material3.Divider(
             modifier = Modifier.padding(vertical = 4.dp),
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f),
         )
-        rows.forEach { (label, count) ->
+        rows.forEach { row ->
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                BodyCell(label, 1f, bold = true)
-                BodyCell(formatFreq(count), 1f)
+                BodyCell(row.label, 0.9f, bold = true)
+                BodyCell(formatFreq(row.sessions), 0.8f)
+                BodyCell(
+                    text = formatLongDuration(row.timeSeconds) +
+                        if (row.extrapolated) "" else " so far",
+                    weight = 1.3f,
+                    color = if (row.extrapolated) MaterialTheme.colorScheme.onBackground
+                    else CacheAmber,
+                )
             }
+        }
+        // The periods nest, so naming the shortest one that doesn't fit explains
+        // every row that fell back at once.
+        partial.minByOrNull { it.days }?.let { shortest ->
+            Text(
+                "The range is shorter than ${periodNoun(shortest.days)}, so the " +
+                    partial.joinToString(" and ") { it.label.lowercase() } +
+                    " times are everything logged so far, not an average.",
+                fontSize = 12.sp,
+                color = CacheAmber,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
         androidx.compose.material3.Divider(
             modifier = Modifier.padding(vertical = 4.dp),
@@ -408,7 +489,7 @@ private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    formatDuration(yearlySeconds),
+                    formatLongDuration(yearlySeconds),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary,
@@ -470,14 +551,23 @@ private fun androidx.compose.foundation.layout.RowScope.BodyCell(
     text: String,
     weight: Float,
     bold: Boolean = false,
+    color: Color = MaterialTheme.colorScheme.onBackground,
 ) {
     Text(
         text,
         fontSize = 14.sp,
         fontWeight = if (bold) FontWeight.Medium else FontWeight.Normal,
-        color = MaterialTheme.colorScheme.onBackground,
+        color = color,
         modifier = Modifier.weight(weight),
     )
+}
+
+/** How a period reads in a sentence: "a week", "a month". */
+private fun periodNoun(days: Double): String = when {
+    days < 7.0 -> "a day"
+    days < 30.0 -> "a week"
+    days < 365.0 -> "a month"
+    else -> "a year"
 }
 
 /** "10" for whole counts, "3.3" otherwise. */
@@ -497,17 +587,7 @@ private fun QuickRange(label: String, onClick: () -> Unit) {
     TextButton(onClick = onClick) { Text(label, fontSize = 13.sp) }
 }
 
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        fontSize = 12.sp,
-        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
-        modifier = Modifier.padding(bottom = 6.dp),
-    )
-}
-
-/** Shared by the tools that need a single date — frequency and batch edit. */
+/** Shared by the tools that need a single date — frequency, batch edit, export. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ToolDateDialog(
