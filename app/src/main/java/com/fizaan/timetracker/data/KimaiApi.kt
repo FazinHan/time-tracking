@@ -46,6 +46,13 @@ interface KimaiApi {
     @POST("api/activities")
     suspend fun createActivity(@Body body: ActivityCreate): Activity
 
+    /**
+     * Kimai attaches only tags it already knows to an entry and drops the rest
+     * without saying so, so anything being imported has to exist first.
+     */
+    @POST("api/tags")
+    suspend fun createTag(@Body body: TagCreate): NamedRef
+
     @GET("api/timesheets")
     suspend fun timesheets(
         @retrofit2.http.Query("begin") begin: String,
@@ -114,11 +121,18 @@ object ApiProvider {
         val logging = HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BASIC
         }
+        // "Unreachable" is a verdict the app has to reach quickly: every screen
+        // waits on it, and the offline path behind it is ready to take over. A
+        // Kimai on the same network answers a connection in milliseconds, so
+        // four seconds is already generous — while the read and call timeouts
+        // stay long, because a server that has answered is worth waiting for.
         val client = OkHttpClient.Builder()
             .addInterceptor(AuthInterceptor(prefs))
             .addInterceptor(logging)
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(4, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
+            .callTimeout(30, TimeUnit.SECONDS)
             .build()
 
         val moshi = Moshi.Builder()

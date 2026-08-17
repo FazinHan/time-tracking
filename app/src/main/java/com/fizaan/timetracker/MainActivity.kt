@@ -295,6 +295,8 @@ class MainActivity : ComponentActivity() {
                                 onSetExportFormat = vm::setExportFormat,
                                 onExport = vm::runExport,
                                 onPrintHandled = vm::exportPrintHandled,
+                                onImport = vm::runImport,
+                                onClearImport = vm::clearImport,
                                 onSetBatchActivity = vm::setBatchActivity,
                                 onSetBatchTag = vm::setBatchTag,
                                 onSetBatchMin = vm::setBatchMin,

@@ -125,11 +125,44 @@ class TimesheetCache(context: Context) {
         )
     }
 
-    /** Forget a deleted entry, so an offline screen can't resurrect it. */
-    suspend fun remove(entryId: Int) = mutex.withLock {
+    /** Forget deleted entries, so an offline screen can't resurrect them. */
+    suspend fun forget(ids: Set<Int>) = mutex.withLock {
         val current = loadLocked()
-        if (current.entries.none { it.id == entryId }) return@withLock
-        writeLocked(current.copy(entries = current.entries.filterNot { it.id == entryId }))
+        if (current.entries.none { it.id in ids }) return@withLock
+        writeLocked(current.copy(entries = current.entries.filterNot { it.id in ids }))
+    }
+
+    suspend fun remove(entryId: Int) = forget(setOf(entryId))
+
+    /**
+     * Write an end onto a cached entry that was still running.
+     *
+     * The running entry is remembered without one — that is what makes it the
+     * running entry — so unless the end is recorded at the moment the timer is
+     * stopped, the saved copy goes on claiming to be running for as long as it
+     * survives, and an offline timer screen believes it.
+     */
+    suspend fun close(entryId: Int, endIso: String) = mutex.withLock {
+        val current = loadLocked()
+        val target = current.entries.firstOrNull { it.id == entryId && it.end == null }
+            ?: return@withLock
+        writeLocked(
+            current.copy(
+                entries = current.entries.map {
+                    if (it.id == target.id) it.copy(end = endIso).withDuration() else it
+                },
+            )
+        )
+    }
+
+    /**
+     * Cached entries that claim to be running but aren't among [runningIds] —
+     * the complete set the server just reported. Each one was stopped somewhere
+     * this app didn't see it happen, so the saved copy is wrong about the only
+     * thing it is ever consulted for.
+     */
+    suspend fun staleRunning(runningIds: Set<Int>): List<TimesheetEntry> = mutex.withLock {
+        loadLocked().entries.filter { it.end == null && it.id !in runningIds }
     }
 
     private suspend fun loadLocked(): CacheSnapshot {
