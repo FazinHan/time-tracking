@@ -1,6 +1,8 @@
 package com.fizaan.timetracker
 
 import android.app.Application
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.fizaan.timetracker.data.Activity
@@ -19,6 +21,7 @@ import com.fizaan.timetracker.data.PendingStop
 import com.fizaan.timetracker.data.PendingStore
 import com.fizaan.timetracker.data.Prefs
 import com.fizaan.timetracker.data.Project
+import com.fizaan.timetracker.data.TagCreate
 import com.fizaan.timetracker.data.TimesheetActive
 import com.fizaan.timetracker.data.TimesheetCache
 import com.fizaan.timetracker.data.TimesheetCreate
@@ -31,8 +34,13 @@ import com.fizaan.timetracker.data.mergePending
 import com.fizaan.timetracker.export.ExportFormat
 import com.fizaan.timetracker.export.ExportRow
 import com.fizaan.timetracker.export.ExportStore
+import com.fizaan.timetracker.export.ImportEntry
+import com.fizaan.timetracker.export.ImportRead
 import com.fizaan.timetracker.export.csvBytes
 import com.fizaan.timetracker.export.exportRows
+import com.fizaan.timetracker.export.planImport
+import com.fizaan.timetracker.export.readEntries
+import com.fizaan.timetracker.export.readTable
 import com.fizaan.timetracker.export.writePdf
 import com.fizaan.timetracker.export.xlsxBytes
 import androidx.core.app.NotificationManagerCompat
@@ -52,10 +60,12 @@ import com.fizaan.timetracker.util.formatKimai
 import com.fizaan.timetracker.util.parseKimaiLocal
 import com.fizaan.timetracker.util.parseKimaiMillis
 import java.io.IOException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -237,6 +247,33 @@ data class ExportState(
     val printFile: String? = null,
 )
 
+/**
+ * What an import did, once it has been done.
+ *
+ * Every number is worth reporting: [added] is the point of it, [duplicates] is
+ * the reassurance that importing the same file twice changed nothing, and
+ * [ignored] covers rows the file couldn't be read out of.
+ */
+data class ImportResult(
+    val fileName: String,
+    val added: Int,
+    val duplicates: Int,
+    val activitiesCreated: Int,
+    /** Tags the file used that the server had never seen. */
+    val tagsCreated: Int = 0,
+    val ignored: Int,
+    /** Set when the server refused some of the entries, with the first reason. */
+    val refused: Int = 0,
+    val refusedWhy: String? = null,
+)
+
+/** Import tool state — one file at a time, read and sent on the spot. */
+data class ImportState(
+    val running: Boolean = false,
+    val fileName: String? = null,
+    val result: ImportResult? = null,
+)
+
 /** Tools screen state. Hosts the frequency calculator, batch edit and export. */
 data class ToolsState(
     val loading: Boolean = false,
@@ -258,6 +295,7 @@ data class ToolsState(
     val colorChoices: Map<String, String> = emptyMap(),
     val batch: BatchState = BatchState(),
     val export: ExportState = ExportState(),
+    val import: ImportState = ImportState(),
 )
 
 /**
@@ -481,13 +519,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * the server says is surfaced, because a signal it refuses will never leave
      * on its own.
      */
-    private suspend fun syncQueue() {
-        if (prefs.serverless) return
+    private suspend fun syncQueue(): Boolean {
+        if (prefs.serverless) return true
         // Read it here rather than trusting the mirror: on a cold start this
         // runs alongside the queue's first load off disk, and would otherwise
         // find it empty and leave a real backlog sitting there.
         readQueue()
-        if (queue.isEmpty) return
+        if (queue.isEmpty) return true
+        var reachable = true
         try {
             queue.stops.forEach { stop ->
                 api().updateTimesheet(
@@ -497,6 +536,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         description = stop.description,
                     ),
                 )
+                // Once the stop leaves the queue it stops standing in for the
+                // end of that entry, so the saved copy has to carry it instead.
+                cache.close(stop.entryId, stop.endIso)
                 pending.removeStop(stop.entryId)
             }
             queue.starts.sortedBy { it.beginIso }.forEach { start ->
@@ -522,13 +564,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 pending.removeStart(start.localId)
             }
         } catch (e: Exception) {
-            if (!unreachable(e)) {
+            reachable = !unreachable(e)
+            if (reachable) {
                 _ui.value = _ui.value.copy(
                     error = "Couldn't send a queued change: ${friendly(e)}",
                 )
             }
         }
         readQueue()
+        return reachable
     }
 
     /** A window of server entries with the queue folded in, ready to render. */
@@ -649,7 +693,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refresh() {
         _ui.value = _ui.value.copy(loading = true, error = null)
         viewModelScope.launch {
-            syncQueue()
+            // A queue that just failed to reach the server has already waited
+            // out the connection; asking again only makes the user wait twice
+            // for the same answer.
+            if (!syncQueue()) {
+                offlineRefresh()
+                return@launch
+            }
             try {
                 // Oldest first, so the timer that started earlier keeps the big clock.
                 val server = api().active().sortedBy { parseKimaiMillis(it.begin) ?: 0L }
@@ -662,6 +712,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // date range, so nothing else would ever write it down, and it
                 // is the first thing needed if the server goes away.
                 cache.remember(server.map { it.asEntry(prefs.projectId) }, acts)
+                // This is also the only moment the app learns that something it
+                // saved as running has since stopped.
+                settleCachedRunning(server.mapTo(mutableSetOf()) { it.id }, acts)
                 // Anything the queue couldn't hand over still runs on the device.
                 val actives = server + queuedActives(acts)
                 _ui.value = _ui.value.copy(
@@ -678,6 +731,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     _ui.value = _ui.value.copy(loading = false, error = friendly(e))
                 }
             }
+        }
+    }
+
+    /**
+     * Bring saved entries that claim to be running back into line with the
+     * server, which has just named every entry that really is.
+     *
+     * Stopping a timer in this app records its end as it happens, so what this
+     * catches is a timer stopped somewhere else — Kimai's own web dashboard, or
+     * another device. The truthful fix is to re-read the window those entries
+     * fall in, because only the server knows when they actually ended; if that
+     * read fails, they are dropped instead, since a saved entry that lies about
+     * still running is worse than a gap the next fetch fills.
+     */
+    private suspend fun settleCachedRunning(runningIds: Set<Int>, acts: List<Activity>) {
+        val stale = cache.staleRunning(runningIds)
+        if (stale.isEmpty()) return
+        // Re-reading months of history to settle one forgotten entry isn't worth
+        // it; past a month, the saved copy is simply dropped.
+        val cutoff = LocalDate.now().minusDays(31).atStartOfDay()
+        val (recent, ancient) = stale.partition {
+            (parseKimaiLocal(it.begin) ?: cutoff.minusDays(1)) >= cutoff
+        }
+        if (ancient.isNotEmpty()) cache.forget(ancient.mapTo(mutableSetOf()) { it.id })
+        if (recent.isEmpty()) return
+        val from = recent.minOf { parseKimaiLocal(it.begin) ?: cutoff }
+            .toLocalDate().atStartOfDay()
+        val to = LocalDateTime.now().plusMinutes(1)
+        try {
+            cache.save(from, to, api().timesheets(formatKimai(from), formatKimai(to)), acts)
+        } catch (e: Exception) {
+            cache.forget(recent.mapTo(mutableSetOf()) { it.id })
         }
     }
 
@@ -934,6 +1019,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Take the stopped timer off the screen, then reload behind it. */
     private suspend fun settleStop(id: Int) {
+        // The saved copy was written while it was running, and is what an
+        // offline timer screen is drawn from — if the end isn't recorded here,
+        // the next time the server is out of reach the app puts the timer back
+        // on the screen and counts it up again.
+        cache.close(id, formatKimai(LocalDateTime.now()))
         readQueue()
         val s = _ui.value
         // Promote the survivor so the UI settles before the refresh lands.
@@ -1170,11 +1260,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // carries its breakdown along when the queue is finally sent.
             if (isQueued(entryId)) {
                 pending.endStart(entryId, formatKimai(LocalDateTime.now()), summary)
-                finishPomodoro()
+                finishPomodoro(entryId)
                 return@launch
             }
             if (_ui.value.offline && !prefs.serverless) {
-                if (queueStop(entryId, beginIso, summary)) finishPomodoro()
+                if (queueStop(entryId, beginIso, summary)) finishPomodoro(entryId)
                 return@launch
             }
             try {
@@ -1183,10 +1273,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     TimesheetUpdate(begin = beginIso, description = summary),
                 )
                 api().stop(entryId)
-                finishPomodoro()
+                finishPomodoro(entryId)
             } catch (e: Exception) {
                 if (canQueue(e)) {
-                    if (queueStop(entryId, beginIso, summary)) finishPomodoro()
+                    if (queueStop(entryId, beginIso, summary)) finishPomodoro(entryId)
                     return@launch
                 }
                 _pomodoro.value = _pomodoro.value.copy(busy = false, error = friendly(e))
@@ -1194,7 +1284,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun finishPomodoro() {
+    private suspend fun finishPomodoro(entryId: Int) {
+        // Same reason as [settleStop]: the saved copy still says it's running.
+        cache.close(entryId, formatKimai(LocalDateTime.now()))
         clearPomodoroSession()
         _pomodoro.value = _pomodoro.value.copy(busy = false)
         readQueue()
@@ -1465,6 +1557,164 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val where = ExportStore.save(ctx, name, s.format.mime, body)
             updateExport { it.copy(running = false, saved = where) }
         }
+    }
+
+    // ---------------- Import ----------------
+
+    private fun updateImport(block: (ImportState) -> ImportState) {
+        _tools.value = _tools.value.copy(import = block(_tools.value.import))
+    }
+
+    fun clearImport() = updateImport { ImportState() }
+
+    /**
+     * Read a CSV or Excel timesheet the user picked and fold it into the server.
+     *
+     * The file is only ever added to what is already there: an entry the server
+     * already holds is counted and left alone, and an activity is created only
+     * when nothing of that name exists yet — matched without regard to case, so
+     * an export that has been through a spreadsheet doesn't quietly grow a
+     * second "Reading". Nothing is deleted or edited, so importing the wrong
+     * file costs at most a few entries to remove afterwards.
+     *
+     * This needs the server. The offline queue only carries starts and stops,
+     * and a file's worth of history has no business being replayed as either.
+     */
+    fun runImport(uri: Uri) {
+        if (prefs.serverless) return
+        updateImport { it.copy(running = true, result = null, fileName = displayName(uri)) }
+        _tools.value = _tools.value.copy(error = null)
+        viewModelScope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) {
+                    ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                } ?: throw IllegalArgumentException("That file couldn't be opened.")
+                val read = readEntries(readTable(bytes))
+                if (read.entries.isEmpty()) {
+                    finishImport(
+                    ImportResult(
+                        fileName = fileNameOrFile(), added = 0, duplicates = 0,
+                        activitiesCreated = 0, ignored = read.ignored,
+                    )
+                )
+                    return@launch
+                }
+                syncQueue()
+                importEntries(read)
+            } catch (e: Exception) {
+                updateImport { it.copy(running = false) }
+                _tools.value = _tools.value.copy(error = friendly(e))
+            }
+        }
+    }
+
+    /** Create what's missing, skip what isn't, and re-read the window after. */
+    private suspend fun importEntries(read: ImportRead) {
+        // Hidden activities count too: a name that exists but isn't offered is
+        // still that activity, and creating a second one would be the duplicate
+        // this is meant to avoid.
+        val activities = api().activities()
+        val from = read.entries.minOf { it.begin }.toLocalDate().atStartOfDay()
+        val to = read.entries.maxOf { it.end }.toLocalDate().plusDays(1).atStartOfDay()
+        val existing = api().timesheets(formatKimai(from), formatKimai(to))
+        val plan = planImport(read.entries, existing, activities)
+
+        val byName = activities.associateByTo(mutableMapOf()) { it.name.trim().lowercase() }
+        var created = 0
+        plan.newActivities.forEach { name ->
+            val made = api().createActivity(ActivityCreate(name = name, project = prefs.projectId))
+            byName[name.trim().lowercase()] = made
+            created++
+        }
+        val tagsMade = createMissingTags(plan.entries)
+
+        var added = 0
+        var refused = 0
+        var why: String? = null
+        plan.entries.forEach { entry ->
+            val activityId = byName[entry.activity.trim().lowercase()]?.id ?: return@forEach
+            val tags = entry.tags.joinToString(",").ifBlank { null }
+            try {
+                // Created with its end already on it — see [TimesheetCreate].
+                api().createTimesheet(
+                    TimesheetCreate(
+                        begin = formatKimai(entry.begin),
+                        project = prefs.projectId,
+                        activity = activityId,
+                        end = formatKimai(entry.end),
+                        description = entry.description,
+                        tags = tags,
+                    )
+                )
+                added++
+            } catch (e: Exception) {
+                if (unreachable(e)) throw e
+                // Kimai refuses entries that overlap a timer, among other things;
+                // one bad row shouldn't cost the user the rest of the file.
+                refused++
+                if (why == null) why = friendly(e)
+            }
+        }
+
+        // Pull the window back down so every other screen — and the offline copy
+        // — shows what was just added.
+        runCatching {
+            val fresh = api().timesheets(formatKimai(from), formatKimai(to))
+            cache.save(from, to, fresh, activities.filter { it.visible })
+        }
+        finishImport(
+            ImportResult(
+                fileName = fileNameOrFile(),
+                added = added,
+                duplicates = plan.duplicates,
+                activitiesCreated = created,
+                tagsCreated = tagsMade,
+                ignored = read.ignored,
+                refused = refused,
+                refusedWhy = why,
+            )
+        )
+    }
+
+    /**
+     * Make sure every tag the file uses exists before the entries do.
+     *
+     * Kimai attaches the tags it recognises and drops the rest without a word,
+     * so a tag that has never been used here would vanish between the file and
+     * the server. Creating one may not be allowed — the token's user needs the
+     * permission — in which case nothing is lost that wasn't already going to
+     * be, and the import carries on.
+     */
+    private suspend fun createMissingTags(entries: List<ImportEntry>): Int {
+        val known = runCatching { api().tags() }.getOrDefault(emptyList())
+        val missing = entries
+            .flatMap { it.tags }
+            .distinctBy { it.lowercase() }
+            .filter { tag -> known.none { it.equals(tag, ignoreCase = true) } }
+        var made = 0
+        missing.forEach { tag ->
+            runCatching { api().createTag(TagCreate(tag)) }.onSuccess { made++ }
+        }
+        return made
+    }
+
+    private fun fileNameOrFile(): String = _tools.value.import.fileName ?: "the file"
+
+    private suspend fun finishImport(result: ImportResult) {
+        updateImport { it.copy(running = false, result = result) }
+        if (result.added > 0 || result.activitiesCreated > 0) {
+            loadTools()
+            refresh()
+        }
+    }
+
+    /** What the picked document calls itself, for the report afterwards. */
+    private fun displayName(uri: Uri): String? = try {
+        ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { if (it.moveToFirst()) it.getString(0) else null }
+            ?: uri.lastPathSegment?.substringAfterLast('/')
+    } catch (_: Exception) {
+        null
     }
 
     // ---------------- Batch edit ----------------

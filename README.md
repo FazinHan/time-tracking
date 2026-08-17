@@ -131,9 +131,14 @@ A week-view grid of entries laid out against the clock.
   - Long spans are written in **days, hours and minutes**: twelve and a half days is a length of time in a way that 300 hours isn't.
   - Under **30 days of data** — counted from the activity's first session in the range, since anything earlier is a period we know nothing about — the result carries a note saying the rates may be well off. Ranges with no sessions at all say so outright.
 - **Batch edit** — narrow entries down by activity, tag, duration and date range, then apply one action to all of them: rename the activity, move them to another activity, set tags, set a colour, or delete. Deletion asks twice.
-- **Export** — a date range as **CSV**, **Excel**, **PDF**, or straight to the **system print dialog**. Files land in **Downloads**; printing keeps no file. Server-backed installs only.
+- **Import/Export** — a timesheet out as a file, and a file back in. Server-backed installs only.
+  - **Export**: a date range as **CSV**, **Excel**, **PDF**, or straight to the **system print dialog**. Files land in **Downloads**; printing keeps no file.
   - The files are written **on the device** from the entries the app holds, not fetched from Kimai. Kimai's own export is a page of its web dashboard, reachable only with a browser login session — an API token cannot get at it — so the columns here match what the app knows (date, times, duration, decimal hours, customer, project, activity, description, tags) and the layout is this app's.
   - Anything still sitting in [the signal queue](#the-signal-queue) is included, with a warning saying so: until it is sent, the export won't match what Kimai holds.
+  - **Import**, at the foot of the same page: pick a **CSV or Excel** file — one this app exported, or anything carrying the same **Date, Begin, End and Activity** columns — and what's missing is added to the server. The reader is forgiving about what a spreadsheet does to a file on the way past: shared string tables, dates and times rewritten as serial numbers, semicolon separators, and columns it doesn't need are all fine.
+  - It only ever **adds**. An entry the server already holds is counted and left alone — the same activity begun at the same minute is the same entry, which is the only identity a timesheet has once ids are gone — so importing the same file twice changes nothing. **Activities are matched by name without regard to case** and created only when nothing of that name exists, hidden ones included, so an export that has been through a spreadsheet can't grow a second *Reading*.
+  - Rows still running (no end time) are **skipped**: a timer belongs to the device it's running on. Anything Kimai refuses — an entry overlapping a running timer, say — is counted separately rather than costing you the rest of the file. Everything that happened is reported: added, already there, skipped, refused.
+  - Import needs the server. The offline queue carries starts and stops, and a file's worth of history has no business being replayed as either.
 - **Storage** — how much the offline cache is holding, or, local-only, how big the database itself has grown.
 
 ---
@@ -160,6 +165,10 @@ The **stop button and running-timer red are deliberately exempt** — a live tim
 ## Offline behaviour
 
 *Server mode only.* Timesheet, calendar, visualisation and tool data is cached on the device after each successful load — as are the timers that were running the last time the server answered. When the server can't be reached, those screens render the cached copy behind an amber banner saying how old it is and why.
+
+**Deciding the server is gone takes about four seconds.** The connection timeout is short on purpose: every screen waits on that verdict, the offline path behind it is ready to take over, and a Kimai on the same network answers in milliseconds. Once a request *has* been answered it is given far longer — a slow answer is still an answer. When a queued signal has just failed to reach the server, the refresh behind it doesn't ask again; the answer is already in.
+
+**A timer that has been stopped stays stopped.** The running timer is saved without an end — that is what makes it the running one — so its end is written into the saved copy at the moment the timer stops, whether that stop reached the server or went to the queue. Otherwise the next load with no server puts the timer back on screen and counts it up again. A timer stopped somewhere else entirely (Kimai's web dashboard, another device) is caught on the next successful load: the server names every entry that really is running, and saved entries that disagree are re-read from it — or, if they're more than a month old, simply dropped.
 
 ### The signal queue
 
@@ -211,6 +220,8 @@ app/src/main/java/com/fizaan/timetracker/
 ├── export/
 │   ├── ExportModel.kt     # Formats, columns, entries flattened to rows (pure)
 │   ├── Writers.kt         # CSV and hand-written xlsx (pure)
+│   ├── Readers.kt         # CSV and xlsx read back to a grid of cells (pure)
+│   ├── Importer.kt        # Grid → entries, and what an import would do (pure)
 │   ├── PdfWriter.kt       # Paginated A4 table
 │   └── ExportStore.kt     # Saving to Downloads via MediaStore
 ├── pomodoro/
@@ -224,7 +235,7 @@ app/src/main/java/com/fizaan/timetracker/
 │   ├── CalendarScreen.kt  # Week-view grid
 │   ├── ToolsScreen.kt     # Frequency tool, storage
 │   ├── BatchTool.kt       # Batch edit
-│   ├── ExportTool.kt      # Export screen and the system print handoff
+│   ├── ImportExportTool.kt # Export, the print handoff, and the file picker
 │   ├── SetupScreen.kt     # Credentials, project, theme
 │   ├── Theme.kt           # Accent, contrast rules, colour scheme
 │   └── VizColors.kt       # Chart palette
@@ -234,8 +245,10 @@ app/src/main/java/com/fizaan/timetracker/
 ```
 
 `app/src/test/` holds JVM unit tests for the pure logic — currently the overlap
-rules, the queue's merge arithmetic, and the export writers (the xlsx is written
-by hand, so it is worth pinning down). Run them with `./gradlew test`.
+rules, the queue's merge arithmetic, the export writers (the xlsx is written by
+hand, so it is worth pinning down) and the import readers, which are checked by
+round-tripping the writers' own output back through them. Run them with
+`./gradlew test`.
 
 ## Notes and limitations
 
@@ -243,6 +256,7 @@ by hand, so it is worth pinning down). Run them with `./gradlew test`.
 - **Two timers at once**, in both modes — the local store enforces the same ceiling Kimai does. Where they overlap, the Productivity pie credits only one of them; see above.
 - **Kimai rounds to the minute** (begin down, end up), so a summary's elapsed total can differ from an entry's stored duration by up to a minute — including when a queued signal is finally sent.
 - **A queued stop needs the entry's own start**, which the app only has for timers it saw running. One started on another device during an outage can't be stopped from this one until it reconnects.
+- **An import can't be undone in one step.** Nothing is overwritten and duplicates are refused, but if the wrong file goes in, the entries it added have to be removed — batch edit by activity and date range is the quickest way.
 - **Exports are the app's own files, not Kimai's.** Kimai only exports from its web dashboard, behind a browser login the API token can't reach, so nothing produced here will be byte-for-byte what the dashboard gives you. Rates and billing, which the app never sees, are not in the columns.
 - The app is **dark only** — the system light/dark setting is ignored.
 - Auto Backup is on, which means the API token can be included in a Google account backup. Turn `android:allowBackup` off in the manifest if that matters to you.

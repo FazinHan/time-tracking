@@ -3,6 +3,7 @@ package com.fizaan.timetracker.ui
 import android.content.Context
 import android.content.ContextWrapper
 import android.app.Activity
+import android.net.Uri
 import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.print.PageRange
@@ -10,6 +11,8 @@ import android.print.PrintAttributes
 import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,9 +23,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
@@ -36,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -49,21 +59,27 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
 /**
- * The export tool: a date range, a format, and a button that produces the file.
+ * The two directions a timesheet travels: out as a file, and back in again.
  *
  * Kimai's own export is a page of its web dashboard rather than part of its API,
  * and the app only ever holds an API token, so the files are written here from
  * the app's own copy of the timesheet. They carry the same entries the export
  * page would; the layout is this app's, not Kimai's.
+ *
+ * Import is the same columns read back: it exists so a timesheet kept somewhere
+ * else — an older phone, a spreadsheet, another Kimai — can be folded into this
+ * one without retyping it.
  */
 @Composable
-fun ExportTool(
+fun ImportExportTool(
     state: ToolsState,
     onSetFrom: (LocalDate) -> Unit,
     onSetTo: (LocalDate) -> Unit,
     onSetFormat: (ExportFormat) -> Unit,
     onExport: () -> Unit,
     onPrintHandled: () -> Unit,
+    onImport: (Uri) -> Unit,
+    onClearImport: () -> Unit,
 ) {
     val export = state.export
     var pickFrom by remember { mutableStateOf(false) }
@@ -205,6 +221,11 @@ fun ExportTool(
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
         )
+
+        Spacer(Modifier.height(28.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
+        Spacer(Modifier.height(20.dp))
+        ImportSection(state, onImport, onClearImport)
         Spacer(Modifier.height(24.dp))
     }
 
@@ -215,6 +236,118 @@ fun ExportTool(
         ToolDateDialog(initial = export.to, onDismiss = { pickTo = false }) { onSetTo(it) }
     }
 }
+
+/**
+ * Picking a file and folding it in.
+ *
+ * The picker is opened for any file rather than for a MIME type: providers
+ * label CSVs as everything from text/csv to application/octet-stream, and a
+ * filter that hides the file the user is looking at is worse than reading one
+ * that turns out not to be a timesheet — which the reader says plainly.
+ */
+@Composable
+private fun ImportSection(
+    state: ToolsState,
+    onImport: (Uri) -> Unit,
+    onClear: () -> Unit,
+) {
+    val import = state.import
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(onImport) }
+
+    SectionLabel("Import")
+    Text(
+        "Read a CSV or Excel timesheet — one this app exported, or anything with the " +
+            "same Date, Begin, End and Activity columns — and add what's missing to " +
+            "the server. Entries already there are left alone, and an activity is only " +
+            "created when there's nothing of that name yet.",
+        fontSize = 13.sp,
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f),
+    )
+    Spacer(Modifier.height(12.dp))
+    OutlinedButton(
+        onClick = { onClear(); picker.launch(arrayOf("*/*")) },
+        enabled = !import.running,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Icon(Icons.Filled.UploadFile, null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(if (import.running) "Reading…" else "Choose a file")
+    }
+
+    if (import.running) {
+        Spacer(Modifier.height(10.dp))
+        Text(
+            import.fileName?.let { "Reading $it and sending what's new…" }
+                ?: "Reading the file…",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+        )
+    }
+
+    import.result?.let { r ->
+        Spacer(Modifier.height(16.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    RoundedCornerShape(12.dp),
+                )
+                .padding(16.dp),
+        ) {
+            Text(
+                if (r.added > 0) "Imported" else "Nothing to import",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                r.fileName,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            Spacer(Modifier.height(8.dp))
+            ImportLine("${r.added} ${entries(r.added)} added")
+            if (r.activitiesCreated > 0) {
+                ImportLine(
+                    "${r.activitiesCreated} new " +
+                        if (r.activitiesCreated == 1) "activity" else "activities"
+                )
+            }
+            if (r.tagsCreated > 0) {
+                ImportLine("${r.tagsCreated} new tag${if (r.tagsCreated == 1) "" else "s"}")
+            }
+            if (r.duplicates > 0) {
+                ImportLine("${r.duplicates} already on the server, left alone")
+            }
+            if (r.ignored > 0) {
+                ImportLine("${r.ignored} ${rows(r.ignored)} skipped — no end time or no date")
+            }
+            if (r.refused > 0) {
+                ImportLine(
+                    "${r.refused} refused by Kimai${r.refusedWhy?.let { ": $it" }.orEmpty()}",
+                    color = CacheAmber,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImportLine(text: String, color: Color = MaterialTheme.colorScheme.onBackground) {
+    Text(
+        "· $text",
+        fontSize = 13.sp,
+        color = color.copy(alpha = if (color == CacheAmber) 1f else 0.8f),
+        modifier = Modifier.padding(top = 2.dp),
+    )
+}
+
+private fun entries(n: Int) = if (n == 1) "entry" else "entries"
+private fun rows(n: Int) = if (n == 1) "row" else "rows"
 
 private fun formatNote(format: ExportFormat): String = when (format) {
     ExportFormat.CSV -> "Plain table, opens anywhere. Saved to Downloads."

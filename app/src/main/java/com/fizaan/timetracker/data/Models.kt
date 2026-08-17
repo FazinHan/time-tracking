@@ -74,12 +74,24 @@ data class TimesheetEntry(
 
 // ---- Request bodies ----
 
+/**
+ * [end] is left out for a timer being started, which is what makes it a timer.
+ * An entry that is already over — one being imported — carries its end here
+ * instead of being opened and closed again: an entry with no end is an active
+ * one, and Kimai refuses those past its limit, so opening one to close it a
+ * moment later fails whenever two timers happen to be running.
+ */
 data class TimesheetCreate(
     val begin: String,
     val project: Int,
     val activity: Int,
+    val end: String? = null,
     val description: String? = null,
     val tags: String? = null,
+)
+
+data class TagCreate(
+    val name: String,
 )
 
 data class ActivityCreate(

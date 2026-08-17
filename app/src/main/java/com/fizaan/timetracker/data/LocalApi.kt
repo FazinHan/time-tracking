@@ -57,19 +57,21 @@ class LocalApi(private val store: LocalStore) : KimaiApi {
 
     override suspend fun createTimesheet(body: TimesheetCreate): CreatedTimesheet =
         store.mutate { data ->
-            check(data.entries.count { it.end == null } < MAX_ACTIVE) {
+            // An entry that arrives with an end is already over, and takes up no
+            // room among the running ones.
+            check(body.end != null || data.entries.count { it.end == null } < MAX_ACTIVE) {
                 "Only $MAX_ACTIVE timers can run at once."
             }
             val entry = TimesheetEntry(
                 id = data.nextEntryId,
                 begin = body.begin,
-                end = null,
+                end = body.end,
                 duration = 0,
                 description = body.description,
                 tags = splitTags(body.tags),
                 activity = body.activity,
                 project = body.project,
-            )
+            ).withDuration()
             data.copy(
                 entries = data.entries + entry,
                 tags = data.tags.plusNew(entry.tags.orEmpty()),
@@ -116,6 +118,15 @@ class LocalApi(private val store: LocalStore) : KimaiApi {
             activities = data.activities + activity,
             nextActivityId = data.nextActivityId + 1,
         ) to activity
+    }
+
+    /**
+     * The local store keeps tags as plain names, and adds unknown ones as they
+     * are used, so this only has to make sure the name is on the list.
+     */
+    override suspend fun createTag(body: TagCreate): NamedRef = store.mutate { data ->
+        val tags = data.tags.plusNew(listOf(body.name))
+        data.copy(tags = tags) to NamedRef(tags.indexOf(body.name), body.name)
     }
 
     override suspend fun updateActivityColor(id: Int, body: ActivityColorUpdate): Activity =

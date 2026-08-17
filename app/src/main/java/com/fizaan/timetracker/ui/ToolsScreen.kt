@@ -1,5 +1,6 @@
 package com.fizaan.timetracker.ui
 
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -21,7 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.CircularProgressIndicator
@@ -62,7 +63,7 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
 /** Which tool is currently open within the Tools section. */
-private enum class Tool { NONE, FREQUENCY, BATCH, EXPORT }
+private enum class Tool { NONE, FREQUENCY, BATCH, TRANSFER }
 
 @Composable
 fun ToolsScreen(
@@ -77,6 +78,8 @@ fun ToolsScreen(
     onSetExportFormat: (ExportFormat) -> Unit,
     onExport: () -> Unit,
     onPrintHandled: () -> Unit,
+    onImport: (Uri) -> Unit,
+    onClearImport: () -> Unit,
     onSetBatchActivity: (Int?) -> Unit,
     onSetBatchTag: (String?) -> Unit,
     onSetBatchMin: (String) -> Unit,
@@ -118,7 +121,7 @@ fun ToolsScreen(
                 text = when (tool) {
                     Tool.FREQUENCY -> "Frequency calculator"
                     Tool.BATCH -> "Batch edit"
-                    Tool.EXPORT -> "Export"
+                    Tool.TRANSFER -> "Import/Export"
                     Tool.NONE -> "Tools"
                 },
                 color = MaterialTheme.colorScheme.onBackground,
@@ -135,7 +138,7 @@ fun ToolsScreen(
                     state = state,
                     onOpenFrequency = { tool = Tool.FREQUENCY },
                     onOpenBatch = { tool = Tool.BATCH },
-                    onOpenExport = { tool = Tool.EXPORT },
+                    onOpenTransfer = { tool = Tool.TRANSFER },
                 )
                 Tool.FREQUENCY -> FrequencyTool(
                     state = state,
@@ -158,13 +161,15 @@ fun ToolsScreen(
                     onConfirm = onConfirmBatch,
                     onDismiss = onDismissBatch,
                 )
-                Tool.EXPORT -> ExportTool(
+                Tool.TRANSFER -> ImportExportTool(
                     state = state,
                     onSetFrom = onSetExportFrom,
                     onSetTo = onSetExportTo,
                     onSetFormat = onSetExportFormat,
                     onExport = onExport,
                     onPrintHandled = onPrintHandled,
+                    onImport = onImport,
+                    onClearImport = onClearImport,
                 )
             }
             if (state.loading || state.computing) {
@@ -194,7 +199,7 @@ private fun ToolList(
     state: ToolsState,
     onOpenFrequency: () -> Unit,
     onOpenBatch: () -> Unit,
-    onOpenExport: () -> Unit,
+    onOpenTransfer: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         ToolCard(
@@ -210,15 +215,15 @@ private fun ToolList(
             icon = Icons.Filled.EditNote,
             onClick = onOpenBatch,
         )
-        // Local-only installs have no export: the feature exists because a
-        // server-backed timesheet is the thing people take elsewhere.
+        // Local-only installs have neither half of this: the feature exists
+        // because a server-backed timesheet is the thing people move around.
         if (!state.serverless) {
             Spacer(Modifier.height(12.dp))
             ToolCard(
-                title = "Export",
-                subtitle = "A date range as CSV, Excel, PDF, or straight to print",
-                icon = Icons.Filled.Download,
-                onClick = onOpenExport,
+                title = "Import/Export",
+                subtitle = "A date range out as CSV, Excel, PDF or print — or a file back in",
+                icon = Icons.Filled.SwapVert,
+                onClick = onOpenTransfer,
             )
         }
         Spacer(Modifier.weight(1f))
