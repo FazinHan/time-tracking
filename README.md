@@ -40,11 +40,25 @@ Turning it on for an install that *had* a server keeps that server's cached data
    ```properties
    sdk.dir=/path/to/Android/Sdk
    ```
-2. Build and install:
+2. **Check your JDK.** The Android Gradle Plugin needs **JDK 17–21**, and a newer one fails with nothing to go on — the whole error is the version number:
+   ```
+   * What went wrong:
+   25.0.4
+   ```
+   `java -version` tells you what you have. If it is 22 or newer, install a JDK 21 and point the build at it, either for the one command:
+   ```bash
+   JAVA_HOME=/path/to/jdk-21 ./gradlew installDebug
+   ```
+   or once and for all, in `local.properties` beside `sdk.dir` (that file is untracked, so it stays yours):
+   ```properties
+   org.gradle.java.home=/path/to/jdk-21
+   ```
+3. Build and install, with the phone plugged in and USB debugging on:
    ```bash
    ./gradlew installDebug
    ```
-3. Launch the app. On first run it opens straight into setup:
+   `installDebug` builds *and* installs, so it fails on a `DeviceException` when there is nothing to install onto — `./gradlew assembleDebug` builds the APK on its own, and leaves it at `app/build/outputs/apk/debug/app-debug.apk` to install however you like.
+4. Launch the app. On first run it opens straight into setup:
    - **Do not use server** — switch on to keep everything on the device; the fields below disappear and **Use this device only** finishes setup (see [Local-only mode](#local-only-mode))
    - **Server URL** — e.g. `http://192.168.0.110:8000`
    - **API token** — from Kimai under *User → API Access*
@@ -53,8 +67,6 @@ Turning it on for an install that *had* a server keeps that server's cached data
    - Tap **Connect**, then choose a **customer** and **project**. Both are remembered.
 
 Setup is reachable again at any time from the gear icon on the Timer screen; the theme picker lives in the same place. Applying a colour there closes it again — reconnecting is not part of changing your theme.
-
-> **Build note:** the Android Gradle Plugin needs **JDK 17–21**. A newer JDK (Java 25, say) will fail. Point `JAVA_HOME` or `org.gradle.java.home` at a JDK 21 install if your system default is newer.
 
 ---
 

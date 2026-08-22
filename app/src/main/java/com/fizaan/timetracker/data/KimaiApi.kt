@@ -91,10 +91,11 @@ object ApiProvider {
     @Volatile private var cachedUrl: String? = null
     @Volatile private var cached: KimaiApi? = null
     @Volatile private var local: LocalApi? = null
+    @Volatile private var store: LocalStore? = null
 
     fun get(context: Context, prefs: Prefs): KimaiApi {
         if (prefs.serverless) {
-            return local ?: LocalApi(LocalStore(context.applicationContext)).also { local = it }
+            return local ?: LocalApi(localStore(context)).also { local = it }
         }
         val base = normalize(prefs.baseUrl)
         val existing = cached
@@ -105,7 +106,23 @@ object ApiProvider {
         }
     }
 
-    /** Force a fresh client (e.g. after the base URL or the mode changes). */
+    /**
+     * The local database, for anything that needs it besides the API — the
+     * Tools screen's storage figures, and seeding it when local-only mode is
+     * switched on.
+     *
+     * There is deliberately only ever one: a [LocalStore] holds the file's
+     * contents in memory, so a second instance is a second copy of the same
+     * data that stops agreeing with the first the moment either writes.
+     */
+    fun localStore(context: Context): LocalStore =
+        store ?: LocalStore(context.applicationContext).also { store = it }
+
+    /**
+     * Force a fresh client (e.g. after the base URL or the mode changes). The
+     * local store is kept: it is the database, not a client, and dropping it
+     * would only mean reading the same file again.
+     */
     fun invalidate() {
         cached = null
         cachedUrl = null

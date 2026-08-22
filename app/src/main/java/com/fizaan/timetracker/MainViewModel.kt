@@ -383,7 +383,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val ctx = app
     private val prefs = Prefs(app)
     private val cache = TimesheetCache(app)
-    private val localStore = LocalStore(app)
+    /** The same instance [ApiProvider] serves local-only mode from — see there. */
+    private val localStore get() = ApiProvider.localStore(ctx)
     private val pending = PendingStore(app)
     /** The queue, mirrored in memory so a screen can be drawn from it directly. */
     private var queue = PendingQueue()
