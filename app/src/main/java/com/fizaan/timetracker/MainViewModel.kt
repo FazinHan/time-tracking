@@ -31,6 +31,15 @@ import com.fizaan.timetracker.data.asActive
 import com.fizaan.timetracker.data.asEntry
 import com.fizaan.timetracker.data.isQueued
 import com.fizaan.timetracker.data.mergePending
+import com.fizaan.timetracker.chart.ChartFormat
+import com.fizaan.timetracker.chart.ChartImage
+import com.fizaan.timetracker.chart.MonthChart
+import com.fizaan.timetracker.chart.TrendChart
+import com.fizaan.timetracker.chart.TrendMetric
+import com.fizaan.timetracker.chart.leadInFrom
+import com.fizaan.timetracker.chart.monthChart
+import com.fizaan.timetracker.chart.rollingTrend
+import com.fizaan.timetracker.chart.trendChart
 import com.fizaan.timetracker.export.ExportFormat
 import com.fizaan.timetracker.export.ExportRow
 import com.fizaan.timetracker.export.ExportStore
@@ -69,6 +78,7 @@ import kotlinx.coroutines.withContext
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.YearMonth
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
@@ -274,6 +284,39 @@ data class ImportState(
     val result: ImportResult? = null,
 )
 
+/**
+ * Rolling-average plotter. [chart] is null until the first plot: the tool is a
+ * question until it has been asked, and the colour override underneath it has
+ * nothing to recolour before then.
+ *
+ * [colorOverride] is a hex the user picked for this plot only — the activity's
+ * own colour, which every other screen draws from, is left alone.
+ */
+data class TrendState(
+    val activityId: Int? = null,
+    val metric: TrendMetric = TrendMetric.TIME,
+    val window: Int = 7,
+    val from: LocalDate = LocalDate.now().minusDays(89),
+    val to: LocalDate = LocalDate.now(),
+    val chart: TrendChart? = null,
+    val colorOverride: String? = null,
+    val running: Boolean = false,
+    val exporting: Boolean = false,
+    /** Where the last exported picture went, for the confirmation line. */
+    val saved: String? = null,
+)
+
+/** Frequency calendar: one activity, one month, redrawn as either changes. */
+data class HeatState(
+    val activityId: Int? = null,
+    val month: YearMonth = YearMonth.now(),
+    val chart: MonthChart? = null,
+    val colorOverride: String? = null,
+    val running: Boolean = false,
+    val exporting: Boolean = false,
+    val saved: String? = null,
+)
+
 /** Tools screen state. Hosts the frequency calculator, batch edit and export. */
 data class ToolsState(
     val loading: Boolean = false,
@@ -296,6 +339,8 @@ data class ToolsState(
     val batch: BatchState = BatchState(),
     val export: ExportState = ExportState(),
     val import: ImportState = ImportState(),
+    val trend: TrendState = TrendState(),
+    val heat: HeatState = HeatState(),
 )
 
 /**
@@ -1509,18 +1554,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val begin = s.from.atStartOfDay()
             val end = s.to.plusDays(1).atStartOfDay()
             try {
-                val entries = try {
-                    val fresh = api().timesheets(
-                        begin = formatKimai(begin), end = formatKimai(end),
-                    )
-                    cache.save(begin, end, fresh, emptyList())
-                    _tools.value = _tools.value.copy(cached = null)
-                    merged(fresh, begin, end)
-                } catch (e: Exception) {
-                    val saved = fallback(e) ?: throw e
-                    _tools.value = _tools.value.copy(cached = saved.second)
-                    merged(saved.first.between(begin, end), begin, end)
-                }
+                val entries = toolsWindow(begin, end)
                 val rows = exportRows(
                     entries = entries,
                     activities = _tools.value.activities.ifEmpty { cache.snapshot().activities },
@@ -1559,6 +1593,190 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             updateExport { it.copy(running = false, saved = where) }
         }
     }
+
+    // ---------------- Charts ----------------
+
+    /**
+     * The entries in a window: from the server when it answers, from the saved
+     * copy when it doesn't. Either way the pending queue is folded in, so a
+     * chart shows what the app knows rather than what the server has been told.
+     */
+    private suspend fun toolsWindow(begin: LocalDateTime, end: LocalDateTime): List<TimesheetEntry> =
+        try {
+            val fresh = api().timesheets(begin = formatKimai(begin), end = formatKimai(end))
+            cache.save(begin, end, fresh, emptyList())
+            _tools.value = _tools.value.copy(cached = null)
+            merged(fresh, begin, end)
+        } catch (e: Exception) {
+            val saved = fallback(e) ?: throw e
+            _tools.value = _tools.value.copy(cached = saved.second)
+            merged(saved.first.between(begin, end), begin, end)
+        }
+
+    private fun updateTrend(block: (TrendState) -> TrendState) {
+        _tools.value = _tools.value.copy(trend = block(_tools.value.trend))
+    }
+
+    /** Anything that changes what would be plotted takes the old plot away. */
+    private fun resetTrend(block: (TrendState) -> TrendState) =
+        updateTrend { block(it).copy(chart = null, saved = null) }
+
+    fun setTrendActivity(id: Int?) = resetTrend { it.copy(activityId = id, colorOverride = null) }
+    fun setTrendMetric(metric: TrendMetric) = resetTrend { it.copy(metric = metric) }
+    fun setTrendWindow(days: Int) = resetTrend { it.copy(window = days.coerceIn(1, 365)) }
+    fun setTrendFrom(date: LocalDate) = resetTrend { it.copy(from = date) }
+    fun setTrendTo(date: LocalDate) = resetTrend { it.copy(to = date) }
+
+    /** Recolours this plot only; the activity keeps the colour it had. */
+    fun setTrendColor(hex: String?) = updateTrend { it.copy(colorOverride = hex, saved = null) }
+
+    /**
+     * Plot the rolling average.
+     *
+     * The window is fetched from [leadInFrom] rather than the first day asked
+     * for, because a trailing average needs the days before the range to be a
+     * real average — without them the line would start low and climb, and the
+     * climb would be an artefact of the arithmetic rather than anything that
+     * happened.
+     */
+    fun runTrend() {
+        val s = _tools.value.trend
+        val activityId = s.activityId ?: return
+        if (s.to.isBefore(s.from)) {
+            _tools.value = _tools.value.copy(error = "End date is before the start date.")
+            return
+        }
+        updateTrend { it.copy(running = true, chart = null, saved = null) }
+        _tools.value = _tools.value.copy(error = null)
+        viewModelScope.launch {
+            syncQueue()
+            val begin = leadInFrom(s.from, s.window).atStartOfDay()
+            val end = s.to.plusDays(1).atStartOfDay()
+            try {
+                val entries = toolsWindow(begin, end)
+                val points = rollingTrend(
+                    entries = entries,
+                    activityId = activityId,
+                    metric = s.metric,
+                    from = s.from,
+                    to = s.to,
+                    window = s.window,
+                    nowMillis = System.currentTimeMillis(),
+                )
+                updateTrend {
+                    it.copy(
+                        running = false,
+                        chart = trendChart(
+                            points = points,
+                            metric = s.metric,
+                            window = s.window,
+                            from = s.from,
+                            to = s.to,
+                            title = activityName(activityId),
+                            activityId = activityId,
+                        ),
+                    )
+                }
+            } catch (e: Exception) {
+                updateTrend { it.copy(running = false) }
+                _tools.value = _tools.value.copy(error = friendly(e))
+            }
+        }
+    }
+
+    fun exportTrend(format: ChartFormat, transparent: Boolean, seriesArgb: Int) {
+        val s = _tools.value.trend
+        val chart = s.chart ?: return
+        updateTrend { it.copy(exporting = true, saved = null) }
+        viewModelScope.launch {
+            val name = "trend-${slug(chart.title)}-${s.window}d-${s.from}_${s.to}." +
+                format.extension
+            try {
+                val where = ExportStore.save(ctx, name, format.mime) { out ->
+                    ChartImage.writeTrend(chart, seriesArgb, format, transparent, out)
+                }
+                updateTrend { it.copy(exporting = false, saved = where) }
+            } catch (e: Exception) {
+                updateTrend { it.copy(exporting = false) }
+                _tools.value = _tools.value.copy(error = friendly(e))
+            }
+        }
+    }
+
+    private fun updateHeat(block: (HeatState) -> HeatState) {
+        _tools.value = _tools.value.copy(heat = block(_tools.value.heat))
+    }
+
+    fun setHeatActivity(id: Int?) {
+        updateHeat { it.copy(activityId = id, chart = null, saved = null, colorOverride = null) }
+        loadHeat()
+    }
+
+    /** Paging never goes past this month: there is nothing there to show yet. */
+    fun shiftHeatMonth(months: Long) {
+        val next = _tools.value.heat.month.plusMonths(months)
+        if (next.isAfter(YearMonth.now())) return
+        updateHeat { it.copy(month = next, chart = null, saved = null) }
+        loadHeat()
+    }
+
+    fun setHeatColor(hex: String?) = updateHeat { it.copy(colorOverride = hex, saved = null) }
+
+    fun loadHeat() {
+        val s = _tools.value.heat
+        val activityId = s.activityId ?: return
+        updateHeat { it.copy(running = true) }
+        _tools.value = _tools.value.copy(error = null)
+        viewModelScope.launch {
+            syncQueue()
+            val begin = s.month.atDay(1).atStartOfDay()
+            val end = s.month.plusMonths(1).atDay(1).atStartOfDay()
+            try {
+                val entries = toolsWindow(begin, end)
+                updateHeat {
+                    it.copy(
+                        running = false,
+                        chart = monthChart(
+                            entries = entries,
+                            activityId = activityId,
+                            month = s.month,
+                            title = activityName(activityId),
+                            today = LocalDate.now(),
+                            nowMillis = System.currentTimeMillis(),
+                        ),
+                    )
+                }
+            } catch (e: Exception) {
+                updateHeat { it.copy(running = false) }
+                _tools.value = _tools.value.copy(error = friendly(e))
+            }
+        }
+    }
+
+    fun exportHeat(format: ChartFormat, transparent: Boolean, seriesArgb: Int) {
+        val s = _tools.value.heat
+        val chart = s.chart ?: return
+        updateHeat { it.copy(exporting = true, saved = null) }
+        viewModelScope.launch {
+            val name = "calendar-${slug(chart.title)}-${s.month}.${format.extension}"
+            try {
+                val where = ExportStore.save(ctx, name, format.mime) { out ->
+                    ChartImage.writeMonth(chart, seriesArgb, format, transparent, out)
+                }
+                updateHeat { it.copy(exporting = false, saved = where) }
+            } catch (e: Exception) {
+                updateHeat { it.copy(exporting = false) }
+                _tools.value = _tools.value.copy(error = friendly(e))
+            }
+        }
+    }
+
+    private fun activityName(id: Int): String =
+        _tools.value.activities.firstOrNull { it.id == id }?.name ?: "Activity #$id"
+
+    /** An activity name as a filename: lower case, one dash for anything odd. */
+    private fun slug(name: String): String =
+        name.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').ifBlank { "activity" }
 
     // ---------------- Import ----------------
 
