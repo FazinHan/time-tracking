@@ -6,6 +6,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,8 +22,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ShowChart
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.EditNote
@@ -31,17 +37,23 @@ import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RichTooltip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,14 +73,17 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.launch
 
 /** Which tool is currently open within the Tools section. */
-private enum class Tool { NONE, FREQUENCY, BATCH, TRANSFER }
+private enum class Tool { NONE, FREQUENCY, TREND, HEATMAP, BATCH, TRANSFER }
 
 @Composable
 fun ToolsScreen(
     state: ToolsState,
     onMenu: () -> Unit,
+    trend: TrendActions,
+    heat: HeatActions,
     onSetFreqActivity: (Int?) -> Unit,
     onSetFreqFrom: (LocalDate) -> Unit,
     onSetFreqTo: (LocalDate) -> Unit,
@@ -120,6 +135,8 @@ fun ToolsScreen(
             Text(
                 text = when (tool) {
                     Tool.FREQUENCY -> "Frequency calculator"
+                    Tool.TREND -> "Rolling average"
+                    Tool.HEATMAP -> "Frequency calendar"
                     Tool.BATCH -> "Batch edit"
                     Tool.TRANSFER -> "Import/Export"
                     Tool.NONE -> "Tools"
@@ -137,6 +154,8 @@ fun ToolsScreen(
                 Tool.NONE -> ToolList(
                     state = state,
                     onOpenFrequency = { tool = Tool.FREQUENCY },
+                    onOpenTrend = { tool = Tool.TREND },
+                    onOpenHeat = { tool = Tool.HEATMAP },
                     onOpenBatch = { tool = Tool.BATCH },
                     onOpenTransfer = { tool = Tool.TRANSFER },
                 )
@@ -147,6 +166,8 @@ fun ToolsScreen(
                     onSetTo = onSetFreqTo,
                     onCompute = onCompute,
                 )
+                Tool.TREND -> TrendTool(state = state, actions = trend)
+                Tool.HEATMAP -> HeatCalendarTool(state = state, actions = heat)
                 Tool.BATCH -> BatchTool(
                     state = state,
                     onSetActivity = onSetBatchActivity,
@@ -198,15 +219,36 @@ fun ToolsScreen(
 private fun ToolList(
     state: ToolsState,
     onOpenFrequency: () -> Unit,
+    onOpenTrend: () -> Unit,
+    onOpenHeat: () -> Unit,
     onOpenBatch: () -> Unit,
     onOpenTransfer: () -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+    ) {
         ToolCard(
             title = "Frequency calculator",
             subtitle = "Average how often and how long you do an activity",
             icon = Icons.Filled.BarChart,
             onClick = onOpenFrequency,
+        )
+        Spacer(Modifier.height(12.dp))
+        ToolCard(
+            title = "Rolling average",
+            subtitle = "How an activity has moved, a point a day",
+            icon = Icons.AutoMirrored.Filled.ShowChart,
+            onClick = onOpenTrend,
+        )
+        Spacer(Modifier.height(12.dp))
+        ToolCard(
+            title = "Frequency calendar",
+            subtitle = "A month of days, darker where it happened more",
+            icon = Icons.Filled.CalendarMonth,
+            onClick = onOpenHeat,
         )
         Spacer(Modifier.height(12.dp))
         ToolCard(
@@ -226,7 +268,7 @@ private fun ToolList(
                 onClick = onOpenTransfer,
             )
         }
-        Spacer(Modifier.weight(1f))
+        Spacer(Modifier.height(24.dp))
         StorageFooter(state)
     }
 }
@@ -338,14 +380,7 @@ private fun FrequencyTool(
                 Text(state.freqTo.format(dateFmt))
             }
         }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            QuickRange("30d") { onSetFrom(LocalDate.now().minusDays(29)); onSetTo(LocalDate.now()) }
-            QuickRange("90d") { onSetFrom(LocalDate.now().minusDays(89)); onSetTo(LocalDate.now()) }
-            QuickRange("1y") { onSetFrom(LocalDate.now().minusDays(364)); onSetTo(LocalDate.now()) }
-        }
+        QuickRanges(onSetFrom = onSetFrom, onSetTo = onSetTo)
 
         Spacer(Modifier.height(20.dp))
         OutlinedButton(
@@ -438,20 +473,24 @@ private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
                 modifier = Modifier.padding(bottom = 8.dp),
             )
         }
-        Text(
-            "Over ${r.spanDays} day${if (r.spanDays == 1) "" else "s"} (${r.activeDays} with " +
-                "sessions): ${r.sessions} session${if (r.sessions == 1) "" else "s"}, " +
-                formatDuration(r.totalSeconds) + " total",
-            fontSize = 13.sp,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Over ${r.spanDays} day${if (r.spanDays == 1) "" else "s"} (${r.activeDays} with " +
+                    "sessions): ${r.sessions} session${if (r.sessions == 1) "" else "s"}, " +
+                    formatDuration(r.totalSeconds) + " total",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                modifier = Modifier.weight(1f),
+            )
+            FreqHelp(r, partial)
+        }
         Spacer(Modifier.height(12.dp))
         Row(modifier = Modifier.fillMaxWidth()) {
             HeaderCell("Average", 0.9f)
             HeaderCell("Sessions", 0.8f)
             HeaderCell("Time", 1.3f)
         }
-        androidx.compose.material3.Divider(
+        HorizontalDivider(
             modifier = Modifier.padding(vertical = 4.dp),
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f),
         )
@@ -468,19 +507,7 @@ private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
                 )
             }
         }
-        // The periods nest, so naming the shortest one that doesn't fit explains
-        // every row that fell back at once.
-        partial.minByOrNull { it.days }?.let { shortest ->
-            Text(
-                "The range is shorter than ${periodNoun(shortest.days)}, so the " +
-                    partial.joinToString(" and ") { it.label.lowercase() } +
-                    " times are everything logged so far, not an average.",
-                fontSize = 12.sp,
-                color = CacheAmber,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-        androidx.compose.material3.Divider(
+        HorizontalDivider(
             modifier = Modifier.padding(vertical = 4.dp),
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f),
         )
@@ -507,38 +534,91 @@ private fun ResultCard(r: FreqResult, cached: CacheInfo?) {
                 modifier = Modifier.align(Alignment.End).padding(top = 2.dp),
             )
         }
-        ShortHistoryNote(r)
     }
 }
+
+/**
+ * The explanations, behind a question mark rather than under the numbers.
+ *
+ * Everything here was once four paragraphs on the screen, read once and then in
+ * the way for good. What stays outside is anything that qualifies *this* result
+ * — the amber "so far" cells, the saved-data notice — while the reasoning
+ * behind them is a tap away. The mark itself turns amber when there is a caveat
+ * inside it, so a result that needs reading twice still looks like one.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FreqHelp(r: FreqResult, partial: List<FreqRow>) {
+    val caveats = freqCaveats(r, partial)
+    val tooltip = rememberTooltipState(isPersistent = true)
+    val scope = rememberCoroutineScope()
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberRichTooltipPositionProvider(),
+        state = tooltip,
+        tooltip = {
+            RichTooltip(
+                title = { Text("How these are worked out") },
+                action = {
+                    TextButton(onClick = { tooltip.dismiss() }) { Text("Got it") }
+                },
+            ) {
+                Text((listOf(FreqMethod) + caveats).joinToString("\n\n"))
+            }
+        },
+    ) {
+        IconButton(onClick = { scope.launch { tooltip.show() } }) {
+            Icon(
+                Icons.AutoMirrored.Outlined.HelpOutline,
+                contentDescription = "How these are worked out",
+                tint = if (caveats.isEmpty()) {
+                    MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+                } else {
+                    CacheAmber
+                },
+            )
+        }
+    }
+}
+
+private const val FreqMethod =
+    "Rates divide by every day in the range, empty ones included, so they read " +
+        "as a rate rather than an intensity: a fortnight off pulls the average " +
+        "down. The count of days that did have sessions is there as context, " +
+        "not as the divisor. Long spans are written in days, hours and minutes " +
+        "— twelve and a half days is a length of time in a way that 300 hours " +
+        "isn't."
 
 /** Under this much history, a rate says more about the window than the habit. */
 private const val ShortHistoryDays = 30
 
 /**
- * The caveat under a result computed from too little history. Days before the
- * first session are days we know nothing about, so the true count is the span
- * from that session onward — a fortnight of it can't tell you a yearly rate.
+ * What is true of this result in particular: a range too short to average over,
+ * and a history too short to trust. Both used to sit under the table in amber.
  */
-@Composable
-private fun ShortHistoryNote(r: FreqResult) {
-    val text = when {
+private fun freqCaveats(r: FreqResult, partial: List<FreqRow>): List<String> = buildList {
+    // The periods nest, so naming the shortest one that doesn't fit explains
+    // every row that fell back at once.
+    partial.minByOrNull { it.days }?.let { shortest ->
+        add(
+            "The range is shorter than ${periodNoun(shortest.days)}, so the " +
+                partial.joinToString(" and ") { it.label.lowercase() } +
+                " times are everything logged so far, not an average.",
+        )
+    }
+    when {
         r.sessions == 0 ->
-            "No sessions for this activity in this range, so every rate above is zero."
+            add("No sessions for this activity in this range, so every rate above is zero.")
         r.observedDays < ShortHistoryDays -> {
             val fmt = DateTimeFormatter.ofPattern("d MMM yyyy")
-            "Only ${r.observedDays} day${if (r.observedDays == 1) "" else "s"} of data for " +
-                "this activity — the first session here was on ${r.firstEntry?.format(fmt)}. " +
-                "Rates from a window this short swing on a single busy or quiet week, and " +
-                "the yearly figures especially may be well off."
+            add(
+                "Only ${r.observedDays} day${if (r.observedDays == 1) "" else "s"} of data " +
+                    "for this activity — the first session here was on " +
+                    "${r.firstEntry?.format(fmt)}. Rates from a window this short swing on " +
+                    "a single busy or quiet week, and the yearly figures especially may be " +
+                    "well off.",
+            )
         }
-        else -> return
     }
-    Text(
-        text,
-        fontSize = 12.sp,
-        color = CacheAmber,
-        modifier = Modifier.padding(top = 12.dp),
-    )
 }
 
 @Composable
@@ -587,9 +667,36 @@ private fun formatPercent(v: Double): String = when {
     else -> "%.0f%%".format(v)
 }
 
+/**
+ * The ranges worth one tap, shared by every tool that takes a date range.
+ *
+ * A week and a fortnight are here because a habit a fortnight old has no
+ * thirty-day answer — and asking for one would only report that most of the
+ * range was empty. They wrap rather than shrink: five of them do not fit across
+ * a narrow phone.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun QuickRanges(onSetFrom: (LocalDate) -> Unit, onSetTo: (LocalDate) -> Unit) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        listOf(7, 15, 30, 90, 365).forEach { days ->
+            QuickRange(if (days == 365) "1y" else "${days}d") {
+                onSetFrom(LocalDate.now().minusDays((days - 1).toLong()))
+                onSetTo(LocalDate.now())
+            }
+        }
+    }
+}
+
 @Composable
 private fun QuickRange(label: String, onClick: () -> Unit) {
-    TextButton(onClick = onClick) { Text(label, fontSize = 13.sp) }
+    TextButton(
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+    ) { Text(label, fontSize = 13.sp) }
 }
 
 /** Shared by the tools that need a single date — frequency, batch edit, export. */

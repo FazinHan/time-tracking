@@ -41,6 +41,8 @@ import com.fizaan.timetracker.pomodoro.EXTRA_POMODORO_PHASE
 import com.fizaan.timetracker.pomodoro.Phase
 import com.fizaan.timetracker.pomodoro.PomodoroAlert
 import com.fizaan.timetracker.ui.CalendarScreen
+import com.fizaan.timetracker.ui.HeatActions
+import com.fizaan.timetracker.ui.TrendActions
 import com.fizaan.timetracker.ui.TimeTrackerTheme
 import com.fizaan.timetracker.ui.MainScreen
 import com.fizaan.timetracker.ui.PomodoroScreen
@@ -286,6 +288,22 @@ class MainActivity : ComponentActivity() {
                             AppScreen.TOOLS -> ToolsScreen(
                                 state = tools,
                                 onMenu = openDrawer,
+                                trend = TrendActions(
+                                    setActivity = vm::setTrendActivity,
+                                    setMetric = vm::setTrendMetric,
+                                    setWindow = vm::setTrendWindow,
+                                    setFrom = vm::setTrendFrom,
+                                    setTo = vm::setTrendTo,
+                                    setColor = vm::setTrendColor,
+                                    plot = vm::runTrend,
+                                    export = vm::exportTrend,
+                                ),
+                                heat = HeatActions(
+                                    setActivity = vm::setHeatActivity,
+                                    shiftMonth = vm::shiftHeatMonth,
+                                    setColor = vm::setHeatColor,
+                                    export = vm::exportHeat,
+                                ),
                                 onSetFreqActivity = vm::setFreqActivity,
                                 onSetFreqFrom = vm::setFreqFrom,
                                 onSetFreqTo = vm::setFreqTo,

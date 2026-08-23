@@ -2,7 +2,6 @@ package com.fizaan.timetracker.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -644,22 +643,6 @@ private fun DeleteConfirmDialog(
 
 // ---------------- Edit dialog ----------------
 
-/**
- * Offline fallback for the swatch picker — a copy of Kimai's default palette.
- * The live list comes from GET /api/config/colors; the server rejects any
- * color not in its configured choices.
- */
-private val DefaultColorChoices = mapOf(
-    "Silver" to "#c0c0c0", "Gray" to "#808080", "Maroon" to "#800000",
-    "Brown" to "#a52a2a", "Red" to "#ff0000", "Orange" to "#ffa500",
-    "Gold" to "#ffd700", "Yellow" to "#ffff00", "Peach" to "#ffdab9",
-    "Khaki" to "#f0e68c", "Olive" to "#808000", "Lime" to "#00ff00",
-    "Jelly" to "#9acd32", "Green" to "#008000", "Teal" to "#008080",
-    "Aqua" to "#00ffff", "LightBlue" to "#add8e6", "DeepSky" to "#00bfff",
-    "Dodger" to "#1e90ff", "Blue" to "#0000ff", "Navy" to "#000080",
-    "Purple" to "#800080", "Fuchsia" to "#ff00ff", "Violet" to "#ee82ee",
-    "Rose" to "#ffe4e1", "Lavender" to "#E6E6FA",
-)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -823,28 +806,7 @@ private fun EditEntryDialog(
 
                     Spacer(Modifier.height(14.dp))
                     FieldLabel("Activity colour (applies everywhere)")
-                    val swatches = colorChoices.ifEmpty { DefaultColorChoices }
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        swatches.values.forEach { hex ->
-                            val c = parseHexColor(hex) ?: return@forEach
-                            val selected = colorHex?.equals(hex, ignoreCase = true) == true
-                            Box(
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .background(c, CircleShape)
-                                    .border(
-                                        width = if (selected) 3.dp else 1.dp,
-                                        color = if (selected) Color.White
-                                        else Color.White.copy(alpha = 0.25f),
-                                        shape = CircleShape,
-                                    )
-                                    .clickable { colorHex = hex },
-                            )
-                        }
-                    }
+                    ColorSwatches(colorChoices, colorHex) { colorHex = it }
                 }
             }
         },

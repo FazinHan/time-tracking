@@ -40,11 +40,25 @@ Turning it on for an install that *had* a server keeps that server's cached data
    ```properties
    sdk.dir=/path/to/Android/Sdk
    ```
-2. Build and install:
+2. **Check your JDK.** The Android Gradle Plugin needs **JDK 17–21**, and a newer one fails with nothing to go on — the whole error is the version number:
+   ```
+   * What went wrong:
+   25.0.4
+   ```
+   `java -version` tells you what you have. If it is 22 or newer, install a JDK 21 and point the build at it, either for the one command:
+   ```bash
+   JAVA_HOME=/path/to/jdk-21 ./gradlew installDebug
+   ```
+   or once and for all, in `local.properties` beside `sdk.dir` (that file is untracked, so it stays yours):
+   ```properties
+   org.gradle.java.home=/path/to/jdk-21
+   ```
+3. Build and install, with the phone plugged in and USB debugging on:
    ```bash
    ./gradlew installDebug
    ```
-3. Launch the app. On first run it opens straight into setup:
+   `installDebug` builds *and* installs, so it fails on a `DeviceException` when there is nothing to install onto — `./gradlew assembleDebug` builds the APK on its own, and leaves it at `app/build/outputs/apk/debug/app-debug.apk` to install however you like.
+4. Launch the app. On first run it opens straight into setup:
    - **Do not use server** — switch on to keep everything on the device; the fields below disappear and **Use this device only** finishes setup (see [Local-only mode](#local-only-mode))
    - **Server URL** — e.g. `http://192.168.0.110:8000`
    - **API token** — from Kimai under *User → API Access*
@@ -53,8 +67,6 @@ Turning it on for an install that *had* a server keeps that server's cached data
    - Tap **Connect**, then choose a **customer** and **project**. Both are remembered.
 
 Setup is reachable again at any time from the gear icon on the Timer screen; the theme picker lives in the same place. Applying a colour there closes it again — reconnecting is not part of changing your theme.
-
-> **Build note:** the Android Gradle Plugin needs **JDK 17–21**. A newer JDK (Java 25, say) will fail. Point `JAVA_HOME` or `org.gradle.java.home` at a JDK 21 install if your system default is newer.
 
 ---
 
@@ -127,9 +139,17 @@ A week-view grid of entries laid out against the clock.
 ### Tools
 
 - **Frequency** — for one activity over a date range: how many sessions, how much time, and how both work out per day/week/month/year, plus a full-year projection of the time. Rates divide by the **whole range**, empty days included, so they read as a rate rather than an intensity: a fortnight off pulls the average down. The number of days that did have sessions is reported alongside, as context.
+  - Quick ranges of **7d, 15d, 30d, 90d and 1y** sit under the dates; a habit a fortnight old has no thirty-day answer worth reading.
   - A period the range is **too short to average** — a monthly figure from a fortnight, a yearly one from anything under a year — reports the **time logged so far** instead, marked as such, rather than multiplying a small window up into a number that isn't true.
   - Long spans are written in **days, hours and minutes**: twelve and a half days is a length of time in a way that 300 hours isn't.
-  - Under **30 days of data** — counted from the activity's first session in the range, since anything earlier is a period we know nothing about — the result carries a note saying the rates may be well off. Ranges with no sessions at all say so outright.
+  - The **explanations live behind the question mark** next to the summary line, not under the table: how the rates are worked out, why a row says "so far", and the caveat that under **30 days of data** — counted from the activity's first session in the range — the rates may be well off. The mark itself **turns amber** when there is a caveat inside it, so a result that needs reading twice still looks like one. What stays on screen is what qualifies the result itself: the amber "so far" cells and the saved-data notice.
+- **Rolling average** — one activity as a line, a point a day, each point the average of that day and the ones behind it. A share price drawn the same way: what it says is which direction a habit is going, not what happened on a particular Tuesday.
+  - Average either **time per day** or **sessions per day**, over a window of **3, 7 or 30 days** or any number you type.
+  - The window is **trailing and always full**. Days before the range are fetched too, so the first point is a real average rather than a line that starts low and climbs because the arithmetic hadn't warmed up yet. Empty days count as zeros, the same convention the frequency tool divides by.
+  - The points appear **from the axis rightwards**, drawn in the **activity's own colour**, which can be changed under the plot for this plot only — the activity keeps the colour every other screen draws it in.
+- **Frequency calendar** — a month of one activity as a grid of days, filled darker where it happened more often, empty where it didn't. A rate answers how much; this answers *when* — the weeks it was kept up and the weeks it wasn't are a shape you can see at a glance. Arrows page back through previous months, stopping at this one.
+  - The shading runs **linearly between that month's own quietest and busiest days**, so every month uses the full scale: one of threes and sevens spreads across it exactly as one of ones and twos does. A day with nothing on it is off the scale entirely — an empty outline rather than the palest fill — and the quietest day that did happen still starts at a quarter, or a month of uniformly quiet days would read as an empty one.
+- Both charts **save as a picture**: a **PNG** or a **PDF** of the same A4 landscape page, on white or with nothing behind it. Files land in **Downloads**. The picture is redrawn for the page rather than screenshotted, so it is the chart laid out for paper rather than for a phone — a wider page fits more date labels along the bottom than the screen does.
 - **Batch edit** — narrow entries down by activity, tag, duration and date range, then apply one action to all of them: rename the activity, move them to another activity, set tags, set a colour, or delete. Deletion asks twice.
 - **Import/Export** — a timesheet out as a file, and a file back in. Server-backed installs only.
   - **Export**: a date range as **CSV**, **Excel**, **PDF**, or straight to the **system print dialog**. Files land in **Downloads**; printing keeps no file.
@@ -224,6 +244,13 @@ app/src/main/java/com/fizaan/timetracker/
 │   ├── Importer.kt        # Grid → entries, and what an import would do (pure)
 │   ├── PdfWriter.kt       # Paginated A4 table
 │   └── ExportStore.kt     # Saving to Downloads via MediaStore
+├── chart/
+│   ├── Rolling.kt         # Daily series and rolling averages (pure)
+│   ├── MonthGrid.kt       # A month of days, counted and laid out (pure)
+│   ├── ChartLayout.kt     # Axes, label thinning, reveal geometry (pure)
+│   ├── ChartTheme.kt      # Chart ink, on screen and on paper (pure)
+│   ├── ChartRenderer.kt   # The one place either chart is drawn
+│   └── ChartImage.kt      # The same drawing, as a PNG or a PDF
 ├── pomodoro/
 │   ├── Pomodoro.kt        # Phase arithmetic and session summary (pure)
 │   └── PomodoroAlarm.kt   # Boundary alarm, receiver, full-screen alert
@@ -233,9 +260,13 @@ app/src/main/java/com/fizaan/timetracker/
 │   ├── VizScreen.kt       # Pie and bar charts
 │   ├── SheetScreen.kt     # Timesheet list, edit and delete
 │   ├── CalendarScreen.kt  # Week-view grid
-│   ├── ToolsScreen.kt     # Frequency tool, storage
+│   ├── ToolsScreen.kt     # The tool list, the frequency tool, storage
+│   ├── TrendTool.kt       # Rolling average plotter
+│   ├── HeatCalendarTool.kt # Frequency calendar
+│   ├── ChartCanvas.kt     # Charts on screen, and the picture export row
 │   ├── BatchTool.kt       # Batch edit
 │   ├── ImportExportTool.kt # Export, the print handoff, and the file picker
+│   ├── Swatches.kt        # The colour grid, wherever one is offered
 │   ├── SetupScreen.kt     # Credentials, project, theme
 │   ├── Theme.kt           # Accent, contrast rules, colour scheme
 │   └── VizColors.kt       # Chart palette
@@ -246,8 +277,12 @@ app/src/main/java/com/fizaan/timetracker/
 
 `app/src/test/` holds JVM unit tests for the pure logic — currently the overlap
 rules, the queue's merge arithmetic, the export writers (the xlsx is written by
-hand, so it is worth pinning down) and the import readers, which are checked by
-round-tripping the writers' own output back through them. Run them with
+hand, so it is worth pinning down), the import readers, which are checked by
+round-tripping the writers' own output back through them, and the chart
+arithmetic: rolling averages and their lead-in, the calendar's layout across
+leap years and Sunday weeks, and the axis and label geometry. Drawing itself is
+not tested — `android.graphics.Paint` is a stub in a unit test, which is exactly
+why everything decidable is decided outside the renderer. Run them with
 `./gradlew test`.
 
 ## Notes and limitations
@@ -257,6 +292,7 @@ round-tripping the writers' own output back through them. Run them with
 - **Kimai rounds to the minute** (begin down, end up), so a summary's elapsed total can differ from an entry's stored duration by up to a minute — including when a queued signal is finally sent.
 - **A queued stop needs the entry's own start**, which the app only has for timers it saw running. One started on another device during an outage can't be stopped from this one until it reconnects.
 - **An import can't be undone in one step.** Nothing is overwritten and duplicates are refused, but if the wrong file goes in, the entries it added have to be removed — batch edit by activity and date range is the quickest way.
+- **A transparent PDF is a contradiction.** A PDF page carries no transparency of its own — every viewer composites it over its own paper — so choosing transparent saves the PDF on white and keeps the alpha only in the PNG.
 - **Exports are the app's own files, not Kimai's.** Kimai only exports from its web dashboard, behind a browser login the API token can't reach, so nothing produced here will be byte-for-byte what the dashboard gives you. Rates and billing, which the app never sees, are not in the columns.
 - The app is **dark only** — the system light/dark setting is ignored.
 - Auto Backup is on, which means the API token can be included in a Google account backup. Turn `android:allowBackup` off in the manifest if that matters to you.
