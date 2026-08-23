@@ -175,8 +175,14 @@ object ChartRenderer {
         val picked = pickLabelIndices(labels, slot, 6f * spec.u) { paint.measureText(it) }
         paint.textAlign = Paint.Align.CENTER
         val baseline = m.bottom + labelHeight
+        val edge = 2f * spec.u
         picked.forEach { i ->
-            canvas.drawText(labels[i], xOf(i, labels.size, m.left, m.right), baseline, paint)
+            // The newest label is centred on a point sitting at the very edge of
+            // the plot, so half of it would fall off the page.
+            val half = paint.measureText(labels[i]) / 2f
+            val x = xOf(i, labels.size, m.left, m.right)
+                .coerceIn(half + edge, spec.width - half - edge)
+            canvas.drawText(labels[i], x, baseline, paint)
         }
     }
 

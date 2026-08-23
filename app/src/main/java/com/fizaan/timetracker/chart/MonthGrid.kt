@@ -68,6 +68,7 @@ fun monthChart(
         seconds[day] = (seconds[day] ?: 0L) + entrySeconds(e.begin, e.end, e.duration, nowMillis)
     }
     val busiest = sessions.values.maxOrNull() ?: 0
+    val quietest = sessions.values.minOrNull() ?: 0
     val cells = (1..month.lengthOfMonth()).map { day ->
         val date = month.atDay(day)
         val count = sessions[date] ?: 0
@@ -75,7 +76,7 @@ fun monthChart(
             date = date,
             sessions = count,
             seconds = seconds[date] ?: 0L,
-            intensity = intensityOf(count, busiest),
+            intensity = intensityOf(count, quietest, busiest),
         )
     }
     return MonthChart(
@@ -97,14 +98,22 @@ fun monthChart(
 }
 
 /**
- * A day with one session has to be visibly filled, or a quiet month reads as an
- * empty one — so the scale starts at a quarter rather than at nothing, and only
- * the difference above that is proportional.
+ * How dark a day is drawn: linear between the month's own quietest and busiest
+ * active days, so the scale always uses its full range whatever the month holds.
+ * A month of threes and sevens spreads across the whole scale; so does one of
+ * ones and twos.
+ *
+ * Two ends are fixed rather than computed. A day with nothing on it is not on
+ * the scale at all — it is an empty outline, not the palest fill — and the
+ * palest day that *did* happen starts at a quarter rather than at nothing, or a
+ * month where every day was equally quiet would read as an empty one. When
+ * every active day had the same count there is no range to spread across, and
+ * they are all the busiest day.
  */
-fun intensityOf(count: Int, busiest: Int): Float = when {
+fun intensityOf(count: Int, quietest: Int, busiest: Int): Float = when {
     count <= 0 -> 0f
-    busiest <= 1 -> 1f
-    else -> 0.25f + 0.75f * (count - 1).toFloat() / (busiest - 1).toFloat()
+    busiest <= quietest -> 1f
+    else -> 0.25f + 0.75f * (count - quietest).toFloat() / (busiest - quietest).toFloat()
 }
 
 fun firstColumnOf(month: YearMonth, weekStart: DayOfWeek): Int =

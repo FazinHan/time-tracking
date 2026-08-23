@@ -26,6 +26,32 @@ class ChartLayoutTest {
     }
 
     @Test
+    fun `quarter steps stay quarters`() {
+        // A peak just over four fifths asks for a step of 0.25. Rounding those
+        // ticks to one decimal moved the gridlines to 0.2 and 0.8.
+        val ticks = niceTicks(0.82)
+        assertEquals(listOf(0.0, 0.25, 0.5, 0.75, 1.0), ticks)
+        assertEquals(2, tickDecimals(ticks))
+    }
+
+    @Test
+    fun `the ticks are evenly spaced whatever the peak`() {
+        listOf(0.3, 0.82, 1.0, 3.2, 7.5, 40.0, 365.0).forEach { peak ->
+            val ticks = niceTicks(peak)
+            val gaps = ticks.zipWithNext { a, b -> b - a }
+            gaps.forEach { assertEquals("peak $peak", gaps.first(), it, 1e-9) }
+            assertTrue("peak $peak", ticks.last() >= peak)
+        }
+    }
+
+    @Test
+    fun `labels carry only the decimals they need`() {
+        assertEquals(0, tickDecimals(listOf(0.0, 1.0, 2.0)))
+        assertEquals(1, tickDecimals(listOf(0.0, 0.5, 1.0)))
+        assertEquals(2, tickDecimals(listOf(0.0, 0.25, 0.5)))
+    }
+
+    @Test
     fun `small values keep their decimals`() {
         val ticks = niceTicks(0.4)
         assertTrue(ticks.last() >= 0.4)

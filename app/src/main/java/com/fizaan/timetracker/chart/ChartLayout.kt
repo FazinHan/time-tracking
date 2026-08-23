@@ -114,14 +114,10 @@ fun revealMillis(count: Int): Int = (250 + 14 * count).coerceIn(450, 1400)
 fun niceTicks(maxValue: Double, target: Int = 4): List<Double> {
     if (!maxValue.isFinite() || maxValue <= 0.0) return listOf(0.0, 1.0)
     val step = niceStep(maxValue / target.coerceAtLeast(1))
-    val top = ceil(maxValue / step) * step
-    val out = mutableListOf<Double>()
-    var v = 0.0
-    while (v <= top + step / 2) {
-        out.add(round(v, step))
-        v += step
-    }
-    return out
+    val count = ceil(maxValue / step - 1e-9).toInt().coerceAtLeast(1)
+    // Multiplied rather than accumulated: adding a step repeatedly drifts, and
+    // rounding the drift away is what turns a quarter into a fifth.
+    return (0..count).map { undust(it * step) }
 }
 
 private fun niceStep(raw: Double): Double {
@@ -137,11 +133,28 @@ private fun niceStep(raw: Double): Double {
     return nice * mag
 }
 
-/** Kills the floating-point dust a repeated addition leaves behind. */
-private fun round(v: Double, step: Double): Double {
-    val decimals = (-floor(log10(step))).toInt().coerceIn(0, 6)
+/**
+ * How many decimals the tick labels need to stay distinct from one another.
+ *
+ * A quarter-hour step needs two; a whole-hour step needs none. Printing "0.2"
+ * and "0.8" for 0.25 and 0.75 — which is what one fixed decimal does — puts
+ * numbers on the axis that are not where the gridlines are.
+ */
+fun tickDecimals(ticks: List<Double>): Int {
+    for (d in 0..3) {
+        if (ticks.all { abs(it - roundTo(it, d)) < 1e-9 }) return d
+    }
+    return 3
+}
+
+private fun roundTo(v: Double, decimals: Int): Double {
     val f = 10.0.pow(decimals)
-    val r = kotlin.math.round(v * f) / f
+    return kotlin.math.round(v * f) / f
+}
+
+/** Clears the last bits of binary noise from an exact multiple. */
+private fun undust(v: Double): Double {
+    val r = kotlin.math.round(v * 1e6) / 1e6
     return if (abs(r) < 1e-9) 0.0 else r
 }
 

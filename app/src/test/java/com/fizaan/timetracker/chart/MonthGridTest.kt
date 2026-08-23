@@ -102,7 +102,7 @@ class MonthGridTest {
         assertEquals(3, c.cells[2].sessions)
         assertEquals(1.0f, c.cells[2].intensity, 1e-6f)
         assertEquals(1, c.cells[3].sessions)
-        assertTrue("one session must still show", c.cells[3].intensity > 0f)
+        assertTrue("the quietest active day must still show", c.cells[3].intensity > 0f)
         assertTrue(c.cells[3].intensity < c.cells[2].intensity)
         assertEquals(0.0f, c.cells[0].intensity, 1e-6f)
     }
@@ -112,6 +112,39 @@ class MonthGridTest {
         val c = chart(listOf(entry(august.atDay(1), 9, 10)))
         assertEquals(1, c.busiest)
         assertEquals(1.0f, c.cells[0].intensity, 1e-6f)
+    }
+
+    @Test
+    fun `the shading spreads across the month's own range, not from one session`() {
+        // Three, five and seven sessions: the quietest active day is the palest
+        // even though three sessions is not one.
+        val days = listOf(august.atDay(1) to 3, august.atDay(2) to 5, august.atDay(3) to 7)
+        val entries = days.flatMap { (date, count) ->
+            (0 until count).map { entry(date, 8 + it, 9 + it, id = it) }
+        }
+        val c = chart(entries)
+        assertEquals(7, c.busiest)
+        assertEquals(0.25f, c.cells[0].intensity, 1e-6f)   // three, the quietest
+        assertEquals(0.625f, c.cells[1].intensity, 1e-6f)  // five, halfway
+        assertEquals(1.0f, c.cells[2].intensity, 1e-6f)    // seven, the busiest
+    }
+
+    @Test
+    fun `a month of equally busy days is all one shade`() {
+        val entries = listOf(august.atDay(4), august.atDay(9)).flatMap { date ->
+            (0 until 3).map { entry(date, 8 + it, 9 + it, id = it) }
+        }
+        val c = chart(entries)
+        assertEquals(1.0f, c.cells[3].intensity, 1e-6f)
+        assertEquals(1.0f, c.cells[8].intensity, 1e-6f)
+        assertEquals(0f, c.cells[4].intensity, 1e-6f)
+    }
+
+    @Test
+    fun `a day with nothing on it is off the scale entirely`() {
+        assertEquals(0f, intensityOf(0, 1, 4), 1e-6f)
+        assertEquals(0.25f, intensityOf(1, 1, 4), 1e-6f)
+        assertEquals(1f, intensityOf(4, 1, 4), 1e-6f)
     }
 
     @Test

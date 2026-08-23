@@ -130,6 +130,7 @@ fun trendChart(
     activityId: Int,
 ): TrendChart {
     val ticks = niceTicks(points.maxOfOrNull { it.value } ?: 0.0)
+    val decimals = tickDecimals(ticks)
     return TrendChart(
         points = points,
         metric = metric,
@@ -137,7 +138,7 @@ fun trendChart(
         from = from,
         to = to,
         yTicks = ticks,
-        yLabels = ticks.map { formatTick(it, metric) },
+        yLabels = ticks.map { formatTick(it, metric, decimals) },
         xLabels = points.map { it.date.format(XLabelFormat) },
         title = title,
         subtitle = "$window-day rolling average · ${metric.label.lowercase()}",
@@ -149,8 +150,9 @@ fun trendChart(
 private val XLabelFormat: java.time.format.DateTimeFormatter =
     java.time.format.DateTimeFormatter.ofPattern("d MMM")
 
-/** Axis and readout numbers: "2h", "0.5h", "3", "1.5". */
-fun formatTick(value: Double, metric: TrendMetric): String {
-    val n = if (value == floor(value)) value.toLong().toString() else "%.1f".format(value)
+/** Axis and readout numbers: "2h", "0.25h", "3", "1.5". */
+fun formatTick(value: Double, metric: TrendMetric, decimals: Int = 1): String {
+    val n = if (value == floor(value)) value.toLong().toString()
+    else "%.${decimals.coerceIn(1, 3)}f".format(value)
     return n + metric.unit
 }
